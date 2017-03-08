@@ -1,66 +1,190 @@
-function [x, flag, relres, iter, resvec]  = minres_3_8_1(A, b, tol, maxit, m1, m2, x0)
-% MINRES Minimum Residual Method
-%%
+## -*- texinfo -*-
+## @deftypefn  {} {@var{x} =} minres (@var{A}, @var{b}, @var{tol}, @var{maxit}, @var{m1}, @var{m2}, @var{x0})
+## @deftypefnx {} {[@var{x}, @var{flag}, @var{relres}, @var{iter}, @var{resvec}] =} minres (@dots{})
+##
+## Solve the linear system of equations @w{@code{@var{A} * @var{x} = @var{b}}}
+## by means of the Minimum Residual Method.
+##
+## The input arguments are
+##
+## @itemize
+## @item
+## @var{A} should be a square, real and symmetric (preferably sparse) matrix 
+## which may be both indefinite and singular.
+##
+## @item
+## @var{b} is the right-hand side vector.
+##
+## @item
+## @var{tol} is the required relative tolerance for the residual error,
+## @w{@code{@var{b} - @var{A} * @var{x}}}.  
+## If @var{tol} is omitted or empty then a tolerance of 1e-6 is used.
+##
+## @item
+## @var{maxit} is the maximum allowable number of iterations; if @var{maxit}
+## is omitted or empty then a value of 100 is used.
+##
+## @item
+## @var{m} = @var{m1} * @var{m2} is the preconditioning matrix, so that
+## the iteration is (theoretically) equivalent to solving by @code{minres}
+## @w{@code{@var{P} * @var{x} = @var{m} \ @var{b}}}, with
+## @w{@code{@var{P} = @var{m} \ @var{A}}}.  
+## If @var{m1} is omitted or empty @code{[]} then no preconditioning is applied.
+## If @var{m2} is omitted, @var{m} = @var{m1} will be used as a preconditioner.
+##
+## @item
+## @var{x0} is the initial guess.  If @var{x0} is omitted or empty then the
+## function sets @var{x0} to a zero vector by default.
+## @end itemize
+##
+## The output arguments are
+##
+## @itemize
+## @item
+## @var{x} is the computed approximation to the solution of
+## @w{@code{@var{A} * @var{x} = @var{b}}}.
+##
+## @item
+## @var{flag} reports on the convergence.  A value of 0 means the solution
+## converged and the tolerance criterion given by @var{tol} is satisfied.
+## A value of 1 means that the @var{maxit} limit for the iteration count was
+## reached.
+##
+## @item
+## @var{relres} is the final relative residual,
+## measured in the Euclidean norm.
+##
+## @item
+## @var{iter} is the actual number of iterations performed.
+##
+## @item
+## @var{resvec(i)} is the Euclidean norm of the residual after the
+## (@var{i}-1)-th iteration, @code{@var{i} = 1, 2, @dots{}, @var{iter}+1}.
+##
+## @end itemize
+##
+##
+## Let us consider a trivial problem with a diagonal matrix (we exploit the
+## sparsity of A)
+##
+## @example
+## @group
+## n = 10;
+## A = diag (sparse (1:n));
+## b = rand (n, 1);
+## [l, u, p] = ilu (A, struct ("droptol", 1.e-3));
+## @end group
+## @end example
+##
+## @sc{Example 1:} Simplest use of @code{minres}
+##
+## @example
+## x = minres (A, b)
+## @end example
+##
+##
+## @sc{Example 2:} @code{minres} with a preconditioner: @var{l} * @var{u}
+##
+## @example
+## x = minres (A, b, 1.e-6, 500, l*u)
+## @end example
+##
+## @sc{Example 3:} @code{minres} with a preconditioner: @var{l} * @var{u}.
+## Faster than @sc{Example 2} since lower and upper triangular matrices are
+## easier to invert
+##
+## @example
+## x = minres (A, b, 1.e-6, 500, l, u)
+## @end example
+##
+## @sc{Example 4:} @code{minres} when @var{A} is indefinite. It fails with @code{pcg}.
+##
+## @example
+## A = diag([20:-1:1, -1:-1:-20]);
+## b = sum(A,2);
+## x = minres(A, b)
+## @end example
+##
+## References:
+##
+## @enumerate
+## @item
+## C. C. PAIGE and M. A. SAUNDERS, @cite{Solution of Sparse Indefinite Systems of Linear Equations},
+## SIAM J. Numer. Anal., 1975. (the minimum residual method)
+##
+## @end enumerate
+## @end deftypefn
+
+function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0)
+## Check the inputs
 if (nargin < 2)
-    error(message('Not enough inputs!'));
-end
+    error('Not enough inputs!');
+endif
 
 [ma, na] = size(A);
 [mb, nb] = size(b);
 if (ma ~= na)
-    error(message('A is not a square matrix!'));
-end
+    error('A is not a square matrix!');
+endif
 if (nb ~= 1)
-    error(message('b is not a vector!'));
-end
+    error('b is not a vector!');
+endif
 if (na ~= mb)
-    error(message('A and b are not matched!'));
-end
+    error('A and b are not matched!');
+endif
 if ~isequal(A, A')
-    error(message('A is not symmetric!'));
-end
+    error('A is not symmetric!');
+endif
 
 if (nargin < 3) || isempty(tol)
     tol = 1e-6;
-end
+endif
 
 if (nargin < 4) || isempty(maxit)
-    maxit = min(100,na);
-end
+    maxit = min(100, na + 5);
+endif
 
 if (nargin >= 5) && ~isempty(m1)
+  ## Preconditioner exists
     if (nargin >= 6) && ~isempty(m2)
         M = m1 * m2;
+        [mm, mn] = size(M);
+        if (mm ~= na) || (mn ~= na)
+          error('M has the wrong size!');
+        endif
+        P = M;
+        Pinv = inv(m2) * inv(m1);
     else
         M = m1;
-    end
-    [mm, mn] = size(M);
-    if (mm ~= na) || (mn ~= na)
-        error(message('M has the wrong size!'));
-    end
+        [mm, mn] = size(M);
+        if (mm ~= na) || (mn ~= na)
+          error('M has the wrong size!');
+        endif
+        P = M;
+        Pinv = inv(P);
+    endif
     preconditionerflag = true;
-    P = sqrt(M);
-    Pinv = inv(P);
 else
+  ## Preconditioner does not exist
     preconditionerflag = false;
     P = speye(na);
     Pinv = speye(na);
-end
+endif
 
 if (nargin >= 7) && ~isempty(x0)
     [mx0, nx0] = size(x0);
     if (mx0 ~= na) || (nx0 ~= 1)
-        error(message('x0 has the wrong size!'));
-    end
+        error('x0 has the wrong size!');
+    endif
 else
     x0 = zeros(na, 1);
-end
+endif
 
     
-%%
+## Preallocation
 N = maxit;
 flag = 1;
-%%
+
 n = length(b);
 beta = zeros(N, 1);
 alpha = zeros(N, 1);
@@ -69,24 +193,38 @@ delta = zeros(N, 1);
 epsilon = zeros(N, 1);
 c = zeros(N, 1);
 s = zeros(N, 1);
+resvec = zeros(N, 1);
+resvec(1) = norm(A * x0 - b);
+
+if (isequal(b, zeros(n, 1)))
+  ## If b is a zero vector
+  x = zeros(nb, 1);
+  flag = 0;
+  relres = NaN;
+  iter = 0;
+  resvec = [resvec(1); 0];
+  return
+endif
 
 if (preconditionerflag == 0)
-    resvec = zeros(N, 1);
-    resvec(1) = norm(A * x0 - b);
-    %%
+  ## If preconditioner does not exist
+  
+  ## Initiation
     v_0 = zeros(n, 1);
     b0 = b - A * x0;
     beta(1) = norm(b0);
-    if beta(1) < tol
+    relres = beta(1) / norm(b);
+    if (relres <= tol) || (beta(1) <= eps)
+      ## If x0 is already good enouph
         x = x0;
         flag = 0;
-        relres = NaN;
         iter = 0;
+        resvec = [resvec(1)];
         return
-    end
+    endif
     v_1 = b0 / beta(1);
     v(:, 1) = v_1; 
-    %%
+    
     v_p = v_0;
     v_n = v_1;
     temp2 = beta(1);
@@ -94,6 +232,7 @@ if (preconditionerflag == 0)
     m_pp = zeros(n, 1);
     x = x0;
 
+    ## Iteration
     for k = 1: (N - 1)
         alpha(k) = v_n' * A * v_n;
         temp1 = A * v_n - alpha(k) * v_n - beta(k) * v_p;
@@ -113,7 +252,7 @@ if (preconditionerflag == 0)
             epsilon(k) = 0;
             gamma_h = alpha(1);
             delta(k) = 0;
-        end
+        endif
 
         gamma(k) = sqrt(gamma_h ^ 2 + beta(k + 1) ^ 2);
         c(k) = gamma_h / gamma(k);
@@ -128,37 +267,40 @@ if (preconditionerflag == 0)
         relres = r / norm(b);
         resvec(k + 1) = r;
         iter = k;
-        if (r < tol) || (beta(k + 1) < tol)
+        ## Check convergence
+        if (relres <= tol) || (beta(k + 1) <= eps)
             flag = 0;
             resvec = resvec(1: (k + 1));
             break
-        end
+        endif
 
         m_pp = m_p;
         m_p = m;
         v_p = v_n;
         v_n = v_f;
 
-    end  
+    endfor  
 else
+ ## If preconditioner exists
     by = Pinv * b;
     y0 = P * x0;
-    resvec = zeros(N, 1);
-    resvec(1) = norm(A * x0 - b);
-    %%
+
+    ## Initiation
     v_0 = zeros(n, 1);
     b0 = by - Pinv * (A * x0);
     beta(1) = norm(b0);
-    if beta(1) < tol
+    relres = beta(1) / norm(by);
+    if (relres <= tol) || (beta(1) <= eps)
+      ## If x0 is already good enouph
         x = x0;
         flag = 0;
-        relres = NaN;
         iter = 0;
+        resvec = [resvec(1)];
         return
-    end
+    endif
     v_1 = b0 / beta(1);
     v(:, 1) = v_1; 
-    %%
+    
     v_p = v_0;
     v_n = v_1;
     temp2 = beta(1);
@@ -166,6 +308,7 @@ else
     m_pp = zeros(n, 1);
     y = y0;
 
+    ## Iteration
     for k = 1: (N - 1)
         alpha(k) = v_n' * (Pinv * (A * (Pinv * v_n)));
         temp1 = (Pinv * (A * (Pinv * v_n))) - alpha(k) * v_n - beta(k) * v_p;
@@ -185,7 +328,7 @@ else
             epsilon(k) = 0;
             gamma_h = alpha(1);
             delta(k) = 0;
-        end
+        endif
 
         gamma(k) = sqrt(gamma_h ^ 2 + beta(k + 1) ^ 2);
         c(k) = gamma_h / gamma(k);
@@ -201,16 +344,17 @@ else
         relres = r / norm(b);
         resvec(k + 1) = r;
         iter = k;
-        if (r < tol) || (beta(k + 1) < tol)
+        ## Check convergence
+        if (relres <= tol) || (beta(k + 1) <= eps)
             flag = 0;
             resvec = resvec(1: (k + 1));
             break
-        end
+        endif
 
         m_pp = m_p;
         m_p = m;
         v_p = v_n;
         v_n = v_f;
 
-    end  
-end
+    endfor 
+endif
