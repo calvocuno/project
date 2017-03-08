@@ -10,7 +10,9 @@
 ## @itemize
 ## @item
 ## @var{A} should be a square, real and symmetric (preferably sparse) matrix 
-## which may be both indefinite and singular.
+## which may be both indefinite and singular or a function
+## handle, inline function or string containing the name of a function which
+## computes @w{@code{@var{A} * @var{x}}}.
 ##
 ## @item
 ## @var{b} is the right-hand side vector.
@@ -82,22 +84,34 @@
 ## x = minres (A, b)
 ## @end example
 ##
+## @sc{Example 2:} @code{minres} with a function which computes
+## @code{@var{A} * @var{x}}
 ##
-## @sc{Example 2:} @code{minres} with a preconditioner: @var{l} * @var{u}
+## @example
+## @group
+## function y = apply_a (x)
+##   y = [1: 10]' .* x;
+## endfunction
+##
+## x = minres ("apply_a", b)
+## @end group
+## @end example
+##
+## @sc{Example 3:} @code{minres} with a preconditioner: @var{l} * @var{u}
 ##
 ## @example
 ## x = minres (A, b, 1.e-6, 500, l*u)
 ## @end example
 ##
-## @sc{Example 3:} @code{minres} with a preconditioner: @var{l} * @var{u}.
-## Faster than @sc{Example 2} since lower and upper triangular matrices are
+## @sc{Example 4:} @code{minres} with a preconditioner: @var{l} * @var{u}.
+## Faster than @sc{Example 3} since lower and upper triangular matrices are
 ## easier to invert
 ##
 ## @example
 ## x = minres (A, b, 1.e-6, 500, l, u)
 ## @end example
 ##
-## @sc{Example 4:} @code{minres} when @var{A} is indefinite. It fails with @code{pcg}.
+## @sc{Example 5:} @code{minres} when @var{A} is indefinite. It fails with @code{pcg}.
 ##
 ## @example
 ## A = diag([20:-1:1, -1:-1:-20]);
@@ -115,246 +129,479 @@
 ## @end enumerate
 ## @end deftypefn
 
-function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0)
-## Check the inputs
-if (nargin < 2)
-    error('Not enough inputs!');
-endif
+function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0, varargin)
+  ## Check the inputs
+  if (nargin < 2)
+      error('Not enough inputs!');
+  endif
 
-[ma, na] = size(A);
-[mb, nb] = size(b);
-if (ma ~= na)
-    error('A is not a square matrix!');
-endif
-if (nb ~= 1)
-    error('b is not a vector!');
-endif
-if (na ~= mb)
-    error('A and b are not matched!');
-endif
-if ~isequal(A, A')
-    error('A is not symmetric!');
-endif
+  if isnumeric (A) 
+    ## If A is a matrix
+    [ma, na] = size(A);
+    [mb, nb] = size(b);
+    if (ma ~= na)
+        error('A is not a square matrix!');
+    endif
+    if (nb ~= 1)
+        error('b is not a vector!');
+    endif
+    if (na ~= mb)
+        error('A and b are not matched!');
+    endif
+    if ~isequal(A, A')
+        error('A is not symmetric!');
+    endif
 
-if (nargin < 3) || isempty(tol)
-    tol = 1e-6;
-endif
+    if (nargin < 3) || isempty(tol)
+        tol = 1e-6;
+    endif
 
-if (nargin < 4) || isempty(maxit)
-    maxit = min(100, na + 5);
-endif
+    if (nargin < 4) || isempty(maxit)
+        maxit = min(100, na + 5);
+    endif
 
-if (nargin >= 5) && ~isempty(m1)
-  ## Preconditioner exists
-    if (nargin >= 6) && ~isempty(m2)
-        M = m1 * m2;
-        [mm, mn] = size(M);
-        if (mm ~= na) || (mn ~= na)
-          error('M has the wrong size!');
+    if (nargin >= 5) && ~isempty(m1)
+      ## Preconditioner exists
+        if (nargin >= 6) && ~isempty(m2)
+            M = m1 * m2;
+            [mm, mn] = size(M);
+            if (mm ~= na) || (mn ~= na)
+              error('M has the wrong size!');
+            endif
+            P = M;
+            Pinv = inv(m2) * inv(m1);
+        else
+            M = m1;
+            [mm, mn] = size(M);
+            if (mm ~= na) || (mn ~= na)
+              error('M has the wrong size!');
+            endif
+            P = M;
+            Pinv = inv(P);
         endif
-        P = M;
-        Pinv = inv(m2) * inv(m1);
+        preconditionerflag = true;
     else
-        M = m1;
-        [mm, mn] = size(M);
-        if (mm ~= na) || (mn ~= na)
-          error('M has the wrong size!');
+      ## Preconditioner does not exist
+        preconditionerflag = false;
+        P = speye(na);
+        Pinv = speye(na);
+    endif
+
+    if (nargin >= 7) && ~isempty(x0)
+        [mx0, nx0] = size(x0);
+        if (mx0 ~= na) || (nx0 ~= 1)
+            error('x0 has the wrong size!');
         endif
-        P = M;
-        Pinv = inv(P);
+    else
+        x0 = zeros(na, 1);
     endif
-    preconditionerflag = true;
-else
-  ## Preconditioner does not exist
-    preconditionerflag = false;
-    P = speye(na);
-    Pinv = speye(na);
-endif
 
-if (nargin >= 7) && ~isempty(x0)
-    [mx0, nx0] = size(x0);
-    if (mx0 ~= na) || (nx0 ~= 1)
-        error('x0 has the wrong size!');
+        
+    ## Preallocation
+    N = maxit;
+    flag = 1;
+
+    n = length(b);
+    beta = zeros(N, 1);
+    alpha = zeros(N, 1);
+    gamma = zeros(N, 1);
+    delta = zeros(N, 1);
+    epsilon = zeros(N, 1);
+    c = zeros(N, 1);
+    s = zeros(N, 1);
+    resvec = zeros(N, 1);
+    resvec(1) = norm(A * x0 - b);
+
+    if (isequal(b, zeros(n, 1)))
+      ## If b is a zero vector
+      x = zeros(nb, 1);
+      flag = 0;
+      relres = NaN;
+      iter = 0;
+      resvec = [resvec(1); 0];
+      return
     endif
-else
-    x0 = zeros(na, 1);
-endif
 
-    
-## Preallocation
-N = maxit;
-flag = 1;
-
-n = length(b);
-beta = zeros(N, 1);
-alpha = zeros(N, 1);
-gamma = zeros(N, 1);
-delta = zeros(N, 1);
-epsilon = zeros(N, 1);
-c = zeros(N, 1);
-s = zeros(N, 1);
-resvec = zeros(N, 1);
-resvec(1) = norm(A * x0 - b);
-
-if (isequal(b, zeros(n, 1)))
-  ## If b is a zero vector
-  x = zeros(nb, 1);
-  flag = 0;
-  relres = NaN;
-  iter = 0;
-  resvec = [resvec(1); 0];
-  return
-endif
-
-if (preconditionerflag == 0)
-  ## If preconditioner does not exist
-  
-  ## Initiation
-    v_0 = zeros(n, 1);
-    b0 = b - A * x0;
-    beta(1) = norm(b0);
-    relres = beta(1) / norm(b);
-    if (relres <= tol) || (beta(1) <= eps)
-      ## If x0 is already good enouph
-        x = x0;
-        flag = 0;
-        iter = 0;
-        resvec = [resvec(1)];
-        return
-    endif
-    v_1 = b0 / beta(1);
-    v(:, 1) = v_1; 
-    
-    v_p = v_0;
-    v_n = v_1;
-    temp2 = beta(1);
-    m_p = zeros(n, 1);
-    m_pp = zeros(n, 1);
-    x = x0;
-
-    ## Iteration
-    for k = 1: (N - 1)
-        alpha(k) = v_n' * A * v_n;
-        temp1 = A * v_n - alpha(k) * v_n - beta(k) * v_p;
-        beta(k + 1) = norm(temp1);
-        v_f = temp1 / beta(k + 1);
-        v(:, k + 1) = v_f;
-
-        if k > 2
-            epsilon(k) = s(k - 2) * beta(k);
-            gamma_h = - c(k - 2) * beta(k) * s(k - 1) - alpha(k) * c(k - 1);
-            delta(k) = - c(k - 2) * beta(k) * c(k - 1) + alpha(k) * s(k - 1);
-        elseif k == 2
-            epsilon(k) = 0;
-            gamma_h = beta(2) * s(1) - alpha(2) * c(1);
-            delta(k) = beta(2) * c(1) + alpha(2) * s(1);
-        else
-            epsilon(k) = 0;
-            gamma_h = alpha(1);
-            delta(k) = 0;
-        endif
-
-        gamma(k) = sqrt(gamma_h ^ 2 + beta(k + 1) ^ 2);
-        c(k) = gamma_h / gamma(k);
-        s(k) = beta(k + 1) / gamma(k);
-
-        m = 1 / gamma(k) * (v_n - epsilon(k) * m_pp - delta(k) * m_p);
-
-        x = x + m * temp2 * c(k);
-        temp2 = temp2 * s(k);
-
-        r = norm(A * x - b);
-        relres = r / norm(b);
-        resvec(k + 1) = r;
-        iter = k;
-        ## Check convergence
-        if (relres <= tol) || (beta(k + 1) <= eps)
+    if (preconditionerflag == 0)
+      ## If preconditioner does not exist
+      
+      ## Initiation
+        v_0 = zeros(n, 1);
+        b0 = b - A * x0;
+        beta(1) = norm(b0);
+        relres = beta(1) / norm(b);
+        if (relres <= tol) || (beta(1) <= eps)
+          ## If x0 is already good enouph
+            x = x0;
             flag = 0;
-            resvec = resvec(1: (k + 1));
-            break
+            iter = 0;
+            resvec = [resvec(1)];
+            return
         endif
-
-        m_pp = m_p;
-        m_p = m;
-        v_p = v_n;
-        v_n = v_f;
-
-    endfor  
-else
- ## If preconditioner exists
-    by = Pinv * b;
-    y0 = P * x0;
-
-    ## Initiation
-    v_0 = zeros(n, 1);
-    b0 = by - Pinv * (A * x0);
-    beta(1) = norm(b0);
-    relres = beta(1) / norm(by);
-    if (relres <= tol) || (beta(1) <= eps)
-      ## If x0 is already good enouph
+        v_1 = b0 / beta(1);
+        v(:, 1) = v_1; 
+        
+        v_p = v_0;
+        v_n = v_1;
+        temp2 = beta(1);
+        m_p = zeros(n, 1);
+        m_pp = zeros(n, 1);
         x = x0;
-        flag = 0;
-        iter = 0;
-        resvec = [resvec(1)];
-        return
-    endif
-    v_1 = b0 / beta(1);
-    v(:, 1) = v_1; 
-    
-    v_p = v_0;
-    v_n = v_1;
-    temp2 = beta(1);
-    m_p = zeros(n, 1);
-    m_pp = zeros(n, 1);
-    y = y0;
 
-    ## Iteration
-    for k = 1: (N - 1)
-        alpha(k) = v_n' * (Pinv * (A * (Pinv * v_n)));
-        temp1 = (Pinv * (A * (Pinv * v_n))) - alpha(k) * v_n - beta(k) * v_p;
-        beta(k + 1) = norm(temp1);
-        v_f = temp1 / beta(k + 1);
-        v(:, k + 1) = v_f;
+        ## Iteration
+        for k = 1: (N - 1)
+            alpha(k) = v_n' * A * v_n;
+            temp1 = A * v_n - alpha(k) * v_n - beta(k) * v_p;
+            beta(k + 1) = norm(temp1);
+            v_f = temp1 / beta(k + 1);
+            v(:, k + 1) = v_f;
 
-        if k > 2
-            epsilon(k) = s(k - 2) * beta(k);
-            gamma_h = - c(k - 2) * beta(k) * s(k - 1) - alpha(k) * c(k - 1);
-            delta(k) = - c(k - 2) * beta(k) * c(k - 1) + alpha(k) * s(k - 1);
-        elseif k == 2
-            epsilon(k) = 0;
-            gamma_h = beta(2) * s(1) - alpha(2) * c(1);
-            delta(k) = beta(2) * c(1) + alpha(2) * s(1);
-        else
-            epsilon(k) = 0;
-            gamma_h = alpha(1);
-            delta(k) = 0;
-        endif
+            if k > 2
+                epsilon(k) = s(k - 2) * beta(k);
+                gamma_h = - c(k - 2) * beta(k) * s(k - 1) - alpha(k) * c(k - 1);
+                delta(k) = - c(k - 2) * beta(k) * c(k - 1) + alpha(k) * s(k - 1);
+            elseif k == 2
+                epsilon(k) = 0;
+                gamma_h = beta(2) * s(1) - alpha(2) * c(1);
+                delta(k) = beta(2) * c(1) + alpha(2) * s(1);
+            else
+                epsilon(k) = 0;
+                gamma_h = alpha(1);
+                delta(k) = 0;
+            endif
 
-        gamma(k) = sqrt(gamma_h ^ 2 + beta(k + 1) ^ 2);
-        c(k) = gamma_h / gamma(k);
-        s(k) = beta(k + 1) / gamma(k);
+            gamma(k) = sqrt(gamma_h ^ 2 + beta(k + 1) ^ 2);
+            c(k) = gamma_h / gamma(k);
+            s(k) = beta(k + 1) / gamma(k);
 
-        m = 1 / gamma(k) * (v_n - epsilon(k) * m_pp - delta(k) * m_p);
+            m = 1 / gamma(k) * (v_n - epsilon(k) * m_pp - delta(k) * m_p);
 
-        y = y + m * temp2 * c(k);
-        temp2 = temp2 * s(k);
+            x = x + m * temp2 * c(k);
+            temp2 = temp2 * s(k);
 
-        x = Pinv * y;
-        r = norm(A * x - b);
-        relres = r / norm(b);
-        resvec(k + 1) = r;
-        iter = k;
-        ## Check convergence
-        if (relres <= tol) || (beta(k + 1) <= eps)
+            r = norm(A * x - b);
+            relres = r / norm(b);
+            resvec(k + 1) = r;
+            iter = k;
+            ## Check convergence
+            if (relres <= tol) || (beta(k + 1) <= eps)
+                flag = 0;
+                resvec = resvec(1: (k + 1));
+                break
+            endif
+
+            m_pp = m_p;
+            m_p = m;
+            v_p = v_n;
+            v_n = v_f;
+
+        endfor  
+    else
+     ## If preconditioner exists
+        by = Pinv * b;
+        y0 = P * x0;
+
+        ## Initiation
+        v_0 = zeros(n, 1);
+        b0 = by - Pinv * (A * x0);
+        beta(1) = norm(b0);
+        relres = beta(1) / norm(by);
+        if (relres <= tol) || (beta(1) <= eps)
+          ## If x0 is already good enouph
+            x = x0;
             flag = 0;
-            resvec = resvec(1: (k + 1));
-            break
+            iter = 0;
+            resvec = [resvec(1)];
+            return
         endif
+        v_1 = b0 / beta(1);
+        v(:, 1) = v_1; 
+        
+        v_p = v_0;
+        v_n = v_1;
+        temp2 = beta(1);
+        m_p = zeros(n, 1);
+        m_pp = zeros(n, 1);
+        y = y0;
 
-        m_pp = m_p;
-        m_p = m;
-        v_p = v_n;
-        v_n = v_f;
+        ## Iteration
+        for k = 1: (N - 1)
+            alpha(k) = v_n' * (Pinv * (A * (Pinv * v_n)));
+            temp1 = (Pinv * (A * (Pinv * v_n))) - alpha(k) * v_n - beta(k) * v_p;
+            beta(k + 1) = norm(temp1);
+            v_f = temp1 / beta(k + 1);
+            v(:, k + 1) = v_f;
 
-    endfor 
-endif
+            if k > 2
+                epsilon(k) = s(k - 2) * beta(k);
+                gamma_h = - c(k - 2) * beta(k) * s(k - 1) - alpha(k) * c(k - 1);
+                delta(k) = - c(k - 2) * beta(k) * c(k - 1) + alpha(k) * s(k - 1);
+            elseif k == 2
+                epsilon(k) = 0;
+                gamma_h = beta(2) * s(1) - alpha(2) * c(1);
+                delta(k) = beta(2) * c(1) + alpha(2) * s(1);
+            else
+                epsilon(k) = 0;
+                gamma_h = alpha(1);
+                delta(k) = 0;
+            endif
+
+            gamma(k) = sqrt(gamma_h ^ 2 + beta(k + 1) ^ 2);
+            c(k) = gamma_h / gamma(k);
+            s(k) = beta(k + 1) / gamma(k);
+
+            m = 1 / gamma(k) * (v_n - epsilon(k) * m_pp - delta(k) * m_p);
+
+            y = y + m * temp2 * c(k);
+            temp2 = temp2 * s(k);
+
+            x = Pinv * y;
+            r = norm(A * x - b);
+            relres = r / norm(b);
+            resvec(k + 1) = r;
+            iter = k;
+            ## Check convergence
+            if (relres <= tol) || (beta(k + 1) <= eps)
+                flag = 0;
+                resvec = resvec(1: (k + 1));
+                break
+            endif
+
+            m_pp = m_p;
+            m_p = m;
+            v_p = v_n;
+            v_n = v_f;
+
+        endfor 
+    endif
+  else 
+    ## If A is a function handle
+    [mb, nb] = size(b);
+    if (nb ~= 1)
+        error('b is not a vector!');
+    endif
+
+    if (nargin < 3) || isempty(tol)
+        tol = 1e-6;
+    endif
+
+    if (nargin < 4) || isempty(maxit)
+        maxit = min(100, mb + 5);
+    endif
+
+    if (nargin >= 5) && ~isempty(m1)
+      ## Preconditioner exists
+        if (nargin >= 6) && ~isempty(m2)
+            M = m1 * m2;
+            [mm, mn] = size(M);
+            if (mm ~= mb) || (mn ~= mb)
+              error('M has the wrong size!');
+            endif
+            P = M;
+            Pinv = inv(m2) * inv(m1);
+        else
+            M = m1;
+            [mm, mn] = size(M);
+            if (mm ~= mb) || (mn ~= mb)
+              error('M has the wrong size!');
+            endif
+            P = M;
+            Pinv = inv(P);
+        endif
+        preconditionerflag = true;
+    else
+      ## Preconditioner does not exist
+        preconditionerflag = false;
+        P = speye(mb);
+        Pinv = speye(mb);
+    endif
+
+    if (nargin >= 7) && ~isempty(x0)
+        [mx0, nx0] = size(x0);
+        if (mx0 ~= mb) || (nx0 ~= 1)
+            error('x0 has the wrong size!');
+        endif
+    else
+        x0 = zeros(mb, 1);
+    endif
+
+        
+    ## Preallocation
+    N = maxit;
+    flag = 1;
+
+    n = length(b);
+    beta = zeros(N, 1);
+    alpha = zeros(N, 1);
+    gamma = zeros(N, 1);
+    delta = zeros(N, 1);
+    epsilon = zeros(N, 1);
+    c = zeros(N, 1);
+    s = zeros(N, 1);
+    resvec = zeros(N, 1);
+    resvec(1) = norm(feval(A, x0, varargin{:}) - b);
+
+    if (isequal(b, zeros(n, 1)))
+      ## If b is a zero vector
+      x = zeros(nb, 1);
+      flag = 0;
+      relres = NaN;
+      iter = 0;
+      resvec = [resvec(1); 0];
+      return
+    endif
+
+    if (preconditionerflag == 0)
+      ## If preconditioner does not exist
+      
+      ## Initiation
+        v_0 = zeros(n, 1);
+        b0 = b - feval(A, x0, varargin{:});
+        beta(1) = norm(b0);
+        relres = beta(1) / norm(b);
+        if (relres <= tol) || (beta(1) <= eps)
+          ## If x0 is already good enouph
+            x = x0;
+            flag = 0;
+            iter = 0;
+            resvec = [resvec(1)];
+            return
+        endif
+        v_1 = b0 / beta(1);
+        v(:, 1) = v_1; 
+        
+        v_p = v_0;
+        v_n = v_1;
+        temp2 = beta(1);
+        m_p = zeros(n, 1);
+        m_pp = zeros(n, 1);
+        x = x0;
+
+        ## Iteration
+        for k = 1: (N - 1)
+            alpha(k) = v_n' * feval(A, v_n, varargin{:});
+            temp1 = feval(A, v_n, varargin{:}) - alpha(k) * v_n - beta(k) * v_p;
+            beta(k + 1) = norm(temp1);
+            v_f = temp1 / beta(k + 1);
+            v(:, k + 1) = v_f;
+
+            if k > 2
+                epsilon(k) = s(k - 2) * beta(k);
+                gamma_h = - c(k - 2) * beta(k) * s(k - 1) - alpha(k) * c(k - 1);
+                delta(k) = - c(k - 2) * beta(k) * c(k - 1) + alpha(k) * s(k - 1);
+            elseif k == 2
+                epsilon(k) = 0;
+                gamma_h = beta(2) * s(1) - alpha(2) * c(1);
+                delta(k) = beta(2) * c(1) + alpha(2) * s(1);
+            else
+                epsilon(k) = 0;
+                gamma_h = alpha(1);
+                delta(k) = 0;
+            endif
+
+            gamma(k) = sqrt(gamma_h ^ 2 + beta(k + 1) ^ 2);
+            c(k) = gamma_h / gamma(k);
+            s(k) = beta(k + 1) / gamma(k);
+
+            m = 1 / gamma(k) * (v_n - epsilon(k) * m_pp - delta(k) * m_p);
+
+            x = x + m * temp2 * c(k);
+            temp2 = temp2 * s(k);
+
+            r = norm(feval(A, x, varargin{:}) - b);
+            relres = r / norm(b);
+            resvec(k + 1) = r;
+            iter = k;
+            ## Check convergence
+            if (relres <= tol) || (beta(k + 1) <= eps)
+                flag = 0;
+                resvec = resvec(1: (k + 1));
+                break
+            endif
+
+            m_pp = m_p;
+            m_p = m;
+            v_p = v_n;
+            v_n = v_f;
+
+        endfor  
+    else
+     ## If preconditioner exists
+        by = Pinv * b;
+        y0 = P * x0;
+
+        ## Initiation
+        v_0 = zeros(n, 1);
+        b0 = by - Pinv * feval(A, x0, varargin{:});
+        beta(1) = norm(b0);
+        relres = beta(1) / norm(by);
+        if (relres <= tol) || (beta(1) <= eps)
+          ## If x0 is already good enouph
+            x = x0;
+            flag = 0;
+            iter = 0;
+            resvec = [resvec(1)];
+            return
+        endif
+        v_1 = b0 / beta(1);
+        v(:, 1) = v_1; 
+        
+        v_p = v_0;
+        v_n = v_1;
+        temp2 = beta(1);
+        m_p = zeros(n, 1);
+        m_pp = zeros(n, 1);
+        y = y0;
+
+        ## Iteration
+        for k = 1: (N - 1)
+            alpha(k) = v_n' * (Pinv * feval(A, Pinv * v_n, varargin{:}));
+            temp1 = Pinv * feval(A, Pinv * v_n, varargin{:}) - alpha(k) * v_n - beta(k) * v_p;
+            beta(k + 1) = norm(temp1);
+            v_f = temp1 / beta(k + 1);
+            v(:, k + 1) = v_f;
+
+            if k > 2
+                epsilon(k) = s(k - 2) * beta(k);
+                gamma_h = - c(k - 2) * beta(k) * s(k - 1) - alpha(k) * c(k - 1);
+                delta(k) = - c(k - 2) * beta(k) * c(k - 1) + alpha(k) * s(k - 1);
+            elseif k == 2
+                epsilon(k) = 0;
+                gamma_h = beta(2) * s(1) - alpha(2) * c(1);
+                delta(k) = beta(2) * c(1) + alpha(2) * s(1);
+            else
+                epsilon(k) = 0;
+                gamma_h = alpha(1);
+                delta(k) = 0;
+            endif
+
+            gamma(k) = sqrt(gamma_h ^ 2 + beta(k + 1) ^ 2);
+            c(k) = gamma_h / gamma(k);
+            s(k) = beta(k + 1) / gamma(k);
+
+            m = 1 / gamma(k) * (v_n - epsilon(k) * m_pp - delta(k) * m_p);
+
+            y = y + m * temp2 * c(k);
+            temp2 = temp2 * s(k);
+
+            x = Pinv * y;
+            r = norm(feval(A, x, varargin{:}) - b);
+            relres = r / norm(b);
+            resvec(k + 1) = r;
+            iter = k;
+            ## Check convergence
+            if (relres <= tol) || (beta(k + 1) <= eps)
+                flag = 0;
+                resvec = resvec(1: (k + 1));
+                break
+            endif
+
+            m_pp = m_p;
+            m_p = m;
+            v_p = v_n;
+            v_n = v_f;
+
+        endfor 
+    endif
+  endif
+endfunction
