@@ -172,7 +172,6 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
           if (mm ~= mb) || (mn ~= mb)
             error('M has the wrong size!');
           endif
-          P = M;
           Pinv = inv(m2) * inv(m1);
       else
           M = m1;
@@ -180,12 +179,10 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
           if (mm ~= mb) || (mn ~= mb)
             error('M has the wrong size!');
           endif
-          P = M;
-          Pinv = inv(P);
+          Pinv = inv(M);
       endif
   else
     ## Preconditioner does not exist
-      P = speye(mb);
       Pinv = speye(mb);
   endif
 
@@ -229,7 +226,6 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
   endif
 
   by = Pinv * b;
-  y0 = P * x0;
 
   ## Initiation
   v_0 = zeros(n, 1);
@@ -256,7 +252,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
   temp2 = beta(1);
   m_p = zeros(n, 1);
   m_pp = zeros(n, 1);
-  y = y0;
+  y = zeros(n, 1);
 
   ## Iteration
   for k = 1: (N - 1)
@@ -294,7 +290,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     y = y + m * temp2 * c(k);
     temp2 = temp2 * s(k);
 
-    x = Pinv * y;
+    x = Pinv * y + x0;
     if Aisnum
        r = norm(A * x - b);
     else
