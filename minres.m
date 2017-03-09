@@ -1,18 +1,48 @@
 ## -*- texinfo -*-
-## @deftypefn  {} {@var{x} =} minres (@var{A}, @var{b}, @var{tol}, @var{maxit}, @var{m1}, @var{m2}, @var{x0})
-## @deftypefnx {} {[@var{x}, @var{flag}, @var{relres}, @var{iter}, @var{resvec}] =} minres (@dots{})
+## Usage
+##
+## @itemize
+## @item
+## x = minres(A, b)
+## @item
+## minres (A, b, tol)
+## @item
+## minres (A, b, tol, maxit)
+## @item
+## minres (A, b, [], maxit)
+## @item
+## minres (A, b, tol, maxit, m)
+## @item
+## minres (A, b, [], [], m)
+## @item
+## minres (A, b, tol, maxit, m1, m2)
+## @item
+## minres (A, b, tol, maxit, m1, m2, x0)
+## @item
+## minres (A, b, tol, maxit, m, [], x0)
+## @item
+## [x, flag] = minres (A, b, @dots{})
+## @item
+## [x, flag, relres] = minres (A, b, @dots{})
+## @item
+## [x, flag, relres, iter] = minres (A, b, @dots{})
+## @item
+## [x, flag, relres, iter, resvec] = minres (A, b, @dots{})
+## @end itemize
+##
 ##
 ## Solve the linear system of equations @w{@code{@var{A} * @var{x} = @var{b}}}
 ## by means of the Minimum Residual Method.
+##
 ##
 ## The input arguments are
 ##
 ## @itemize
 ## @item
-## @var{A} should be a square, real and symmetric (preferably sparse) matrix 
+## @var{A} should be a square and symmetric (preferably sparse) matrix 
 ## which may be both indefinite and singular or a function
-## handle, inline function or string containing the name of a function which
-## computes @w{@code{@var{A} * @var{x}}}.
+## handle, inline function or string containing the name of a function
+## which computes @w{@code{@var{A} * @var{x}}}.
 ##
 ## @item
 ## @var{b} is the right-hand side vector.
@@ -30,7 +60,9 @@
 ## @var{m} = @var{m1} * @var{m2} is the preconditioning matrix, so that
 ## the iteration is (theoretically) equivalent to solving by @code{minres}
 ## @w{@code{@var{P} * @var{x} = @var{m} \ @var{b}}}, with
-## @w{@code{@var{P} = @var{m} \ @var{A}}}.  
+## @w{@code{@var{P} = @var{m} \ @var{A}}}. Instead of matrices @var{m1} and
+## @var{m2}, the user may pass two functions which return the results of
+## applying the inverse of @var{m1} and @var{m2} to a vector.
 ## If @var{m1} is omitted or empty @code{[]} then no preconditioning is applied.
 ## If @var{m2} is omitted, @var{m} = @var{m1} will be used as a preconditioner.
 ##
@@ -119,7 +151,7 @@
 ## x = minres(A, b)
 ## @end example
 ##
-## References:
+## Reference:
 ##
 ## @enumerate
 ## @item
@@ -127,17 +159,16 @@
 ## SIAM J. Numer. Anal., 1975. (the minimum residual method)
 ##
 ## @end enumerate
-## @end deftypefn
 
 function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0, varargin)
   ## Check the inputs
   if (nargin < 2)
-      error('Not enough inputs!');
+      print_usage();
   endif
 
   [mb, nb] = size(b);
   if (nb ~= 1)
-        error('b is not a vector!');
+        print_usage();
   endif
   
   Aisnum = isnumeric(A);
@@ -146,13 +177,13 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     [ma, na] = size(A);
     
     if (ma ~= na)
-        error('A is not a square matrix!');
+        print_usage();
     endif
     if (na ~= mb)
-        error('A and b are not matched!');
+        print_usage();
     endif
     if ~isequal(A, A')
-        error('A is not symmetric!');
+        print_usage();
     endif
   endif
 
@@ -182,7 +213,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
   if (nargin >= 7) && ~isempty(x0)
       [mx0, nx0] = size(x0);
       if (mx0 ~= mb) || (nx0 ~= 1)
-          error('x0 has the wrong size!');
+          print_usage();
       endif
   else
       x0 = zeros(mb, 1);
@@ -228,6 +259,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     else
       if misnum
         by = m1 \ b;
+        b
       else
         by = feval(m1, b, varargin{:});
       endif
@@ -248,7 +280,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
         endif
       else
         if misnum
-          b0 = by - m1 \ (A * x0);
+          b0 = by - m1 \ (A * x0)
         else
           b0 = by - feval(m1, A * x0, varargin{:});
         endif
@@ -301,15 +333,15 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
       if m1exist
         if m2exist
           if misnum
-            temp0 = m2 \ (m1 \ (A * (m2 \ (m1 \ v_n))));
+            temp0 = m2 \ (m1 \ (A * v_n));
           else
-            temp0 = feval(m2, feval(m1, A * feval(m2, feval(m1, v_n, varargin{:}), varargin{:}), varargin{:}), varargin{:});
+            temp0 = feval(m2, feval(m1, A * v_n, varargin{:}), varargin{:});
           endif
         else
           if misnum
-            temp0 = m1 \ (A * (m1 \ v_n));
+            temp0 = m1 \ (A * v_n);
           else
-            temp0 = feval(m1, A * feval(m1, v_n, varargin{:}), varargin{:});
+            temp0 = feval(m1, A * v_n, varargin{:});
           endif
         endif
       else
@@ -319,15 +351,15 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
       if m1exist
         if m2exist
           if misnum
-            temp0 = m2 \ (m1 \ feval(A, m2 \ (m1 \ v_n), varargin{:}));
+            temp0 = m2 \ (m1 \ feval(A, v_n, varargin{:}));
           else
-            temp0 = feval(m2, feval(m1, feval(A, feval(m2, feval(m1, v_n, varargin{:}), varargin{:}), varargin{:}), varargin{:}), varargin{:});
+            temp0 = feval(m2, feval(m1, feval(A, v_n, varargin{:}), varargin{:}), varargin{:});
           endif
         else
           if misnum
-            temp0 = m1 \ feval(A, m1 \ v_n, varargin{:});
+            temp0 = m1 \ feval(A, v_n, varargin{:});
           else
-            temp0 = feval(m1, feval(A, feval(m1, v_n, varargin{:}), varargin{:}), varargin{:});
+            temp0 = feval(m1, feval(A, v_n, varargin{:}), varargin{:});
           endif
         endif
       else
@@ -363,23 +395,8 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     y = y + m * temp2 * c(k);
     temp2 = temp2 * s(k);
 
-    if m1exist
-      if m2exist
-        if misnum
-          x = m2 \ (m1 \ y) + x0;
-        else
-          x = feval(m2, feval(m1, y, varargin{:}), varargin{:}) + x0;
-        endif
-      else
-        if misnum
-          x = m1 \ y + x0;
-        else
-          x = feval(m1, y, varargin{:}) + x0;
-        endif
-      endif
-    else
-      x = y + x0;
-    endif
+    x = y + x0;
+    
     if Aisnum
        r = norm(A * x - b);
     else
@@ -406,9 +423,10 @@ endfunction
 
 %!demo
 %! ## Simplest usage of minres (see also 'help minres')
+%! ## Note that A is indefinite
 %!
-%! N = 10;
-%! A = diag ([1:N]); b = rand (N, 1);
+%! A = diag([20:-1:1, -1:-1:-20]);
+%! b = sum(A,2);
 %! y = A \ b;  # y is the true solution
 %! x = minres (A, b);
 %! printf ("The solution relative error is %g\n", norm (x - y) / norm (y));
@@ -428,97 +446,28 @@ endfunction
 %! xlabel ("Iteration"); ylabel ("log(||b-Ax||/||b||)");
 %! legend ("relative residual");
 
-%!demo
-%! ## Full output from pcg, including the eigenvalue estimates
-%! ## Hilbert matrix is extremely ill-conditioned, so pcg WILL have problems
-%!
-%! N = 10;
-%! A = hilb (N); b = rand (N, 1);
-%! X = A \ b;  # X is the true solution
-%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], 200);
-%! printf ("The solution relative error is %g\n", norm (x - X) / norm (X));
-%! printf ("Condition number estimate is %g\n", eigest(2) / eigest(1));
-%! printf ("Actual condition number is   %g\n", cond (A));
-%! title ("Convergence history");
-%! semilogy ([0:iter], resvec, ["o-g";"+-r"]);
-%! xlabel ("Iteration"); ylabel ("log(||b-Ax||)");
-%! legend ("absolute residual", "absolute preconditioned residual");
-
-%!demo
-%! ## Full output from pcg, including the eigenvalue estimates
-%! ## We use the 1-D Laplacian matrix for A, and cond(A) = O(N^2)
-%! ## and that's the reason we need some preconditioner; here we take
-%! ## a very simple and not powerful Jacobi preconditioner,
-%! ## which is the diagonal of A.
-%!
-%! N = 100;
-%! A = zeros (N, N);
-%! for i = 1 : N - 1 # form 1-D Laplacian matrix
-%!   A(i:i+1, i:i+1) = [2 -1; -1 2];
-%! endfor
-%! b = rand (N, 1);
-%! X = A \ b;  # X is the true solution
-%! maxit = 80;
-%! printf ("System condition number is %g\n", cond (A));
-%! ## No preconditioner: the convergence is very slow!
-%!
-%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], maxit);
-%! printf ("System condition number estimate is %g\n", eigest(2) / eigest(1));
-%! title ("Convergence history");
-%! semilogy ([0:iter], resvec(:,1), "o-g");
-%! xlabel ("Iteration"); ylabel ("log(||b-Ax||)");
-%! legend ("NO preconditioning: absolute residual");
-%!
-%! pause (1);
-%! ## Test Jacobi preconditioner: it will not help much!!!
-%!
-%! M = diag (diag (A)); # Jacobi preconditioner
-%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], maxit, M);
-%! printf ("JACOBI preconditioned system condition number estimate is %g\n", eigest(2) / eigest(1));
-%! hold on;
-%! semilogy ([0:iter], resvec(:,1), "o-r");
-%! legend ("NO preconditioning: absolute residual", ...
-%!         "JACOBI preconditioner: absolute residual");
-%!
-%! pause (1);
-%! ## Test nonoverlapping block Jacobi preconditioner: it will help much!
-%!
-%! M = zeros (N, N); k = 4;
-%! for i = 1 : k : N # form 1-D Laplacian matrix
-%!   M(i:i+k-1, i:i+k-1) = A(i:i+k-1, i:i+k-1);
-%! endfor
-%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], maxit, M);
-%! printf ("BLOCK JACOBI preconditioned system condition number estimate is %g\n", eigest(2) / eigest(1));
-%! semilogy ([0:iter], resvec(:,1), "o-b");
-%! legend ("NO preconditioning: absolute residual", ...
-%!         "JACOBI preconditioner: absolute residual", ...
-%!         "BLOCK JACOBI preconditioner: absolute residual");
-%! hold off;
-
 %!test
 %! ## solve small diagonal system
 %!
 %! N = 10;
 %! A = diag ([1:N]); b = rand (N, 1);
 %! X = A \ b;  # X is the true solution
-%! [x, flag] = pcg (A, b, [], N+1);
+%! [x, flag] = minres (A, b, [], N+1);
 %! assert (norm (x - X) / norm (X), 0, 1e-10);
 %! assert (flag, 0);
 
 %!test
 %! ## solve small indefinite diagonal system
-%! ## Despite A being indefinite, the iteration continues and converges.
-%! ## The indefiniteness of A is detected.
 %!
 %! N = 10;
 %! A = diag([1:N] .* (-ones(1, N) .^ 2)); b = rand (N, 1);
 %! X = A \ b;  # X is the true solution
-%! [x, flag] = pcg (A, b, [], N+1);
+%! [x, flag] = minres (A, b, [], N+1);
 %! assert (norm (x - X) / norm (X), 0, 1e-10);
-%! assert (flag, 3);
+%! assert (flag, 0);
 
 %!test
-%! ## solve tridiagonal system, do not converge in default 20 iterations
+%! ## solve tridiagonal system, do not converge in 20 iterations
 %!
 %! N = 100;
 %! A = zeros (N, N);
@@ -527,14 +476,14 @@ endfunction
 %! endfor
 %! b = ones (N, 1);
 %! X = A \ b;  # X is the true solution
-%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, 1e-12);
+%! [x, flag, relres, iter, resvec] = minres (A, b, 1e-12, 20);
 %! assert (flag);
-%! assert (relres > 1.0);
+%! assert (relres > 0.1);
 %! assert (iter, 20); # should perform max allowable default number of iterations
 
 %!warning <iteration converged too fast>
 %! ## solve tridiagonal system with "perfect" preconditioner which converges
-%! ## in one iteration, so the eigest does not work and issues a warning.
+%! ## in one iteration
 %!
 %! N = 100;
 %! A = zeros (N, N);
@@ -543,8 +492,7 @@ endfunction
 %! endfor
 %! b = ones (N, 1);
 %! X = A \ b;  # X is the true solution
-%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], [], A, [], b);
+%! [x, flag, relres, iter, resvec] = minres (A, b, [], [], A, [], b);
 %! assert (norm (x - X) / norm (X), 0, 1e-6);
 %! assert (flag, 0);
 %! assert (iter, 1);  # should converge in one iteration
-%! assert (isnan (eigest), isnan ([NaN, NaN]));
