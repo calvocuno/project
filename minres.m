@@ -166,24 +166,17 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
 
   if (nargin >= 5) && ~isempty(m1)
     ## Preconditioner exists
+    m1exist = true;
+    misnum = isnumeric(m1);
       if (nargin >= 6) && ~isempty(m2)
-          M = m1 * m2;
-          [mm, mn] = size(M);
-          if (mm ~= mb) || (mn ~= mb)
-            error('M has the wrong size!');
-          endif
-          Pinv = inv(m2) * inv(m1);
+        m2exist = true;
       else
-          M = m1;
-          [mm, mn] = size(M);
-          if (mm ~= mb) || (mn ~= mb)
-            error('M has the wrong size!');
-          endif
-          Pinv = inv(M);
+        m2exist = false;
       endif
   else
     ## Preconditioner does not exist
-      Pinv = speye(mb);
+      m1exist = false;
+      m2exist = false;
   endif
 
   if (nargin >= 7) && ~isempty(x0)
@@ -197,7 +190,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
 
         
   ## Preallocation
-  N = maxit;
+  N = maxit + 1;
   flag = 1;
 
   n = length(b);
@@ -224,15 +217,63 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     resvec = [resvec(1); 0];
     return
   endif
-
-  by = Pinv * b;
+  
+  if m1exist
+    if m2exist
+      if misnum
+        by = m2 \ (m1 \ b);
+      else
+        by = feval(m2, feval(m1, b, varargin{:}), varargin{:});
+      endif
+    else
+      if misnum
+        by = m1 \ b;
+      else
+        by = feval(m1, b, varargin{:});
+      endif
+    endif
+  else
+    by = b;
+  endif
 
   ## Initiation
   v_0 = zeros(n, 1);
   if Aisnum
-    b0 = by - Pinv * (A * x0);
+    if m1exist
+      if m2exist
+        if misnum
+          b0 = by - m2 \ (m1 \ (A * x0));
+        else
+          b0 = by - feval(m2, feval(m1, A * x0, varargin{:}), varargin{:});
+        endif
+      else
+        if misnum
+          b0 = by - m1 \ (A * x0);
+        else
+          b0 = by - feval(m1, A * x0, varargin{:});
+        endif
+      endif
+    else
+      b0 = by - A * x0;
+    endif
   else
-    b0 = by - Pinv * feval(A, x0, varargin{:});
+    if m1exist
+      if m2exist
+        if misnum
+          b0 = by - m2 \ (m1 \ feval(A, x0, varargin{:}));
+        else
+          b0 = by - feval(m2, feval(m1, feval(A, x0, varargin{:})), varargin{:});
+        endif
+      else
+        if misnum
+          b0 = by - m1 \ feval(A, x0, varargin{:});
+        else
+          b0 = by - feval(m1, feval(A, x0, varargin{:}), varargin{:});
+        endif
+      endif
+    else
+      b0 = by - feval(A, x0, varargin{:});
+    endif
   endif
   beta(1) = norm(b0);
   relres = beta(1) / norm(by);
@@ -257,12 +298,44 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
   ## Iteration
   for k = 1: (N - 1)
     if Aisnum
-       alpha(k) = v_n' * (Pinv * (A * (Pinv * v_n)));
-       temp1 = (Pinv * (A * (Pinv * v_n))) - alpha(k) * v_n - beta(k) * v_p;
+      if m1exist
+        if m2exist
+          if misnum
+            temp0 = m2 \ (m1 \ (A * (m2 \ (m1 \ v_n))));
+          else
+            temp0 = feval(m2, feval(m1, A * feval(m2, feval(m1, v_n, varargin{:}), varargin{:}), varargin{:}), varargin{:});
+          endif
+        else
+          if misnum
+            temp0 = m1 \ (A * (m1 \ v_n));
+          else
+            temp0 = feval(m1, A * feval(m1, v_n, varargin{:}), varargin{:});
+          endif
+        endif
+      else
+        temp0 = A * v_n;
+      endif
     else
-       alpha(k) = v_n' * (Pinv * feval(A, Pinv * v_n, varargin{:}));
-       temp1 = (Pinv * feval(A, Pinv * v_n, varargin{:})) - alpha(k) * v_n - beta(k) * v_p;
+      if m1exist
+        if m2exist
+          if misnum
+            temp0 = m2 \ (m1 \ feval(A, m2 \ (m1 \ v_n), varargin{:}));
+          else
+            temp0 = feval(m2, feval(m1, feval(A, feval(m2, feval(m1, v_n, varargin{:}), varargin{:}), varargin{:}), varargin{:}), varargin{:});
+          endif
+        else
+          if misnum
+            temp0 = m1 \ feval(A, m1 \ v_n, varargin{:});
+          else
+            temp0 = feval(m1, feval(A, feval(m1, v_n, varargin{:}), varargin{:}), varargin{:});
+          endif
+        endif
+      else
+        temp0 = feval(A, v_n, varargin{:});
+      endif
     endif
+    alpha(k) = v_n' * temp0;
+    temp1 = temp0 - alpha(k) * v_n - beta(k) * v_p;
     beta(k + 1) = norm(temp1);
     v_f = temp1 / beta(k + 1);
     v(:, k + 1) = v_f;
@@ -290,7 +363,23 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     y = y + m * temp2 * c(k);
     temp2 = temp2 * s(k);
 
-    x = Pinv * y + x0;
+    if m1exist
+      if m2exist
+        if misnum
+          x = m2 \ (m1 \ y) + x0;
+        else
+          x = feval(m2, feval(m1, y, varargin{:}), varargin{:}) + x0;
+        endif
+      else
+        if misnum
+          x = m1 \ y + x0;
+        else
+          x = feval(m1, y, varargin{:}) + x0;
+        endif
+      endif
+    else
+      x = y + x0;
+    endif
     if Aisnum
        r = norm(A * x - b);
     else
@@ -313,3 +402,149 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
 
   endfor 
 endfunction
+
+
+%!demo
+%! ## Simplest usage of minres (see also 'help minres')
+%!
+%! N = 10;
+%! A = diag ([1:N]); b = rand (N, 1);
+%! y = A \ b;  # y is the true solution
+%! x = minres (A, b);
+%! printf ("The solution relative error is %g\n", norm (x - y) / norm (y));
+%!
+
+%!demo
+%! ## Full output from minres
+%! ## We use this output to plot the convergence history
+%!
+%! N = 10;
+%! A = diag ([1:N]); b = rand (N, 1);
+%! X = A \ b;  # X is the true solution
+%! [x, flag, relres, iter, resvec] = minres (A, b);
+%! printf ("The solution relative error is %g\n", norm (x - X) / norm (X));
+%! title ("Convergence history");
+%! semilogy ([0:iter], resvec / resvec(1), "o-g");
+%! xlabel ("Iteration"); ylabel ("log(||b-Ax||/||b||)");
+%! legend ("relative residual");
+
+%!demo
+%! ## Full output from pcg, including the eigenvalue estimates
+%! ## Hilbert matrix is extremely ill-conditioned, so pcg WILL have problems
+%!
+%! N = 10;
+%! A = hilb (N); b = rand (N, 1);
+%! X = A \ b;  # X is the true solution
+%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], 200);
+%! printf ("The solution relative error is %g\n", norm (x - X) / norm (X));
+%! printf ("Condition number estimate is %g\n", eigest(2) / eigest(1));
+%! printf ("Actual condition number is   %g\n", cond (A));
+%! title ("Convergence history");
+%! semilogy ([0:iter], resvec, ["o-g";"+-r"]);
+%! xlabel ("Iteration"); ylabel ("log(||b-Ax||)");
+%! legend ("absolute residual", "absolute preconditioned residual");
+
+%!demo
+%! ## Full output from pcg, including the eigenvalue estimates
+%! ## We use the 1-D Laplacian matrix for A, and cond(A) = O(N^2)
+%! ## and that's the reason we need some preconditioner; here we take
+%! ## a very simple and not powerful Jacobi preconditioner,
+%! ## which is the diagonal of A.
+%!
+%! N = 100;
+%! A = zeros (N, N);
+%! for i = 1 : N - 1 # form 1-D Laplacian matrix
+%!   A(i:i+1, i:i+1) = [2 -1; -1 2];
+%! endfor
+%! b = rand (N, 1);
+%! X = A \ b;  # X is the true solution
+%! maxit = 80;
+%! printf ("System condition number is %g\n", cond (A));
+%! ## No preconditioner: the convergence is very slow!
+%!
+%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], maxit);
+%! printf ("System condition number estimate is %g\n", eigest(2) / eigest(1));
+%! title ("Convergence history");
+%! semilogy ([0:iter], resvec(:,1), "o-g");
+%! xlabel ("Iteration"); ylabel ("log(||b-Ax||)");
+%! legend ("NO preconditioning: absolute residual");
+%!
+%! pause (1);
+%! ## Test Jacobi preconditioner: it will not help much!!!
+%!
+%! M = diag (diag (A)); # Jacobi preconditioner
+%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], maxit, M);
+%! printf ("JACOBI preconditioned system condition number estimate is %g\n", eigest(2) / eigest(1));
+%! hold on;
+%! semilogy ([0:iter], resvec(:,1), "o-r");
+%! legend ("NO preconditioning: absolute residual", ...
+%!         "JACOBI preconditioner: absolute residual");
+%!
+%! pause (1);
+%! ## Test nonoverlapping block Jacobi preconditioner: it will help much!
+%!
+%! M = zeros (N, N); k = 4;
+%! for i = 1 : k : N # form 1-D Laplacian matrix
+%!   M(i:i+k-1, i:i+k-1) = A(i:i+k-1, i:i+k-1);
+%! endfor
+%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], maxit, M);
+%! printf ("BLOCK JACOBI preconditioned system condition number estimate is %g\n", eigest(2) / eigest(1));
+%! semilogy ([0:iter], resvec(:,1), "o-b");
+%! legend ("NO preconditioning: absolute residual", ...
+%!         "JACOBI preconditioner: absolute residual", ...
+%!         "BLOCK JACOBI preconditioner: absolute residual");
+%! hold off;
+
+%!test
+%! ## solve small diagonal system
+%!
+%! N = 10;
+%! A = diag ([1:N]); b = rand (N, 1);
+%! X = A \ b;  # X is the true solution
+%! [x, flag] = pcg (A, b, [], N+1);
+%! assert (norm (x - X) / norm (X), 0, 1e-10);
+%! assert (flag, 0);
+
+%!test
+%! ## solve small indefinite diagonal system
+%! ## Despite A being indefinite, the iteration continues and converges.
+%! ## The indefiniteness of A is detected.
+%!
+%! N = 10;
+%! A = diag([1:N] .* (-ones(1, N) .^ 2)); b = rand (N, 1);
+%! X = A \ b;  # X is the true solution
+%! [x, flag] = pcg (A, b, [], N+1);
+%! assert (norm (x - X) / norm (X), 0, 1e-10);
+%! assert (flag, 3);
+
+%!test
+%! ## solve tridiagonal system, do not converge in default 20 iterations
+%!
+%! N = 100;
+%! A = zeros (N, N);
+%! for i = 1 : N - 1 # form 1-D Laplacian matrix
+%!   A(i:i+1, i:i+1) = [2 -1; -1 2];
+%! endfor
+%! b = ones (N, 1);
+%! X = A \ b;  # X is the true solution
+%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, 1e-12);
+%! assert (flag);
+%! assert (relres > 1.0);
+%! assert (iter, 20); # should perform max allowable default number of iterations
+
+%!warning <iteration converged too fast>
+%! ## solve tridiagonal system with "perfect" preconditioner which converges
+%! ## in one iteration, so the eigest does not work and issues a warning.
+%!
+%! N = 100;
+%! A = zeros (N, N);
+%! for i = 1 : N - 1  # form 1-D Laplacian matrix
+%!   A(i:i+1, i:i+1) = [2 -1; -1 2];
+%! endfor
+%! b = ones (N, 1);
+%! X = A \ b;  # X is the true solution
+%! [x, flag, relres, iter, resvec, eigest] = pcg (A, b, [], [], A, [], b);
+%! assert (norm (x - X) / norm (X), 0, 1e-6);
+%! assert (flag, 0);
+%! assert (iter, 1);  # should converge in one iteration
+%! assert (isnan (eigest), isnan ([NaN, NaN]));
