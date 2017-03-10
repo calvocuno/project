@@ -143,7 +143,8 @@
 ## x = minres (A, b, 1.e-6, 500, l, u)
 ## @end example
 ##
-## @sc{Example 5:} @code{minres} when @var{A} is indefinite. It fails with @code{pcg}.
+## @sc{Example 5:} @code{minres} when @var{A} is indefinite. It fails 
+## with @code{pcg}.
 ##
 ## @example
 ## A = diag([20:-1:1, -1:-1:-20]);
@@ -155,19 +156,21 @@
 ##
 ## @enumerate
 ## @item
-## C. C. PAIGE and M. A. SAUNDERS, @cite{Solution of Sparse Indefinite Systems of Linear Equations},
+## C. C. PAIGE and M. A. SAUNDERS, @cite{Solution of Sparse Indefinite 
+## Systems of Linear Equations},
 ## SIAM J. Numer. Anal., 1975. (the minimum residual method)
 ##
 ## @end enumerate
 
-function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0, varargin)
+function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
+  maxit, m1, m2, x0, varargin)
   ## Check the inputs
   if (nargin < 2)
       print_usage();
   endif
 
   [mb, nb] = size(b);
-  if (nb ~= 1)
+  if (nb != 1)
         print_usage();
   endif
   
@@ -176,13 +179,10 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     ## If A is a matrix
     [ma, na] = size(A);
     
-    if (ma ~= na)
+    if (ma != na)
         print_usage();
     endif
-    if (na ~= mb)
-        print_usage();
-    endif
-    if ~isequal(A, A')
+    if (na != mb)
         print_usage();
     endif
   endif
@@ -195,11 +195,11 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     maxit = min(100, mb + 5);
   endif
 
-  if (nargin >= 5) && ~isempty(m1)
+  if (nargin >= 5) && !isempty(m1)
     ## Preconditioner exists
     m1exist = true;
     misnum = isnumeric(m1);
-      if (nargin >= 6) && ~isempty(m2)
+      if (nargin >= 6) && !isempty(m2)
         m2exist = true;
       else
         m2exist = false;
@@ -210,9 +210,9 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
       m2exist = false;
   endif
 
-  if (nargin >= 7) && ~isempty(x0)
+  if (nargin >= 7) && !isempty(x0)
       [mx0, nx0] = size(x0);
-      if (mx0 ~= mb) || (nx0 ~= 1)
+      if (mx0 != mb) || (nx0 != 1)
           print_usage();
       endif
   else
@@ -259,7 +259,6 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     else
       if misnum
         by = m1 \ b;
-        b
       else
         by = feval(m1, b, varargin{:});
       endif
@@ -280,7 +279,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
         endif
       else
         if misnum
-          b0 = by - m1 \ (A * x0)
+          b0 = by - m1 \ (A * x0);
         else
           b0 = by - feval(m1, A * x0, varargin{:});
         endif
@@ -294,7 +293,8 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
         if misnum
           b0 = by - m2 \ (m1 \ feval(A, x0, varargin{:}));
         else
-          b0 = by - feval(m2, feval(m1, feval(A, x0, varargin{:})), varargin{:});
+          b0 = by - feval(m2, feval(m1, feval(A, x0, varargin{:})),...
+          varargin{:});
         endif
       else
         if misnum
@@ -318,14 +318,13 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     return
   endif
   v_1 = b0 / beta(1);
-  v(:, 1) = v_1; 
         
   v_p = v_0;
   v_n = v_1;
   temp2 = beta(1);
   m_p = zeros(n, 1);
   m_pp = zeros(n, 1);
-  y = zeros(n, 1);
+  x = x0;
 
   ## Iteration
   for k = 1: (N - 1)
@@ -353,7 +352,8 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
           if misnum
             temp0 = m2 \ (m1 \ feval(A, v_n, varargin{:}));
           else
-            temp0 = feval(m2, feval(m1, feval(A, v_n, varargin{:}), varargin{:}), varargin{:});
+            temp0 = feval(m2, feval(m1, feval(A, v_n, varargin{:}),...
+            varargin{:}), varargin{:});
           endif
         else
           if misnum
@@ -369,8 +369,8 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
     alpha(k) = v_n' * temp0;
     temp1 = temp0 - alpha(k) * v_n - beta(k) * v_p;
     beta(k + 1) = norm(temp1);
-    v_f = temp1 / beta(k + 1);
-    v(:, k + 1) = v_f;
+    
+    
 
     if k > 2
        epsilon(k) = s(k - 2) * beta(k);
@@ -392,10 +392,9 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
 
     m = 1 / gamma(k) * (v_n - epsilon(k) * m_pp - delta(k) * m_p);
 
-    y = y + m * temp2 * c(k);
+    x = x + m * temp2 * c(k);
     temp2 = temp2 * s(k);
 
-    x = y + x0;
     
     if Aisnum
        r = norm(A * x - b);
@@ -411,6 +410,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, maxit, m1, m2, x0,
        resvec = resvec(1: (k + 1));
        break
     endif
+    v_f = temp1 / beta(k + 1);
 
     m_pp = m_p;
     m_p = m;
@@ -467,6 +467,29 @@ endfunction
 %! assert (flag, 0);
 
 %!test
+%! ## solve small singular diagonal system
+%!
+%! N = 10;
+%! A = diag([(-1):(N - 2)]); 
+%! b = sum(A, 2);
+%! [x, flag] = minres (A, b, [], N+1);
+%! assert (norm (A * x - b) / norm (b), 0, 1e-6);
+%! assert (flag, 0);
+
+%!test
+%! ## solve small indefinite hermitian system
+%!
+%! B = diag([0;1;-2])
+%! U = [1/sqrt(2), 1/sqrt(2), 0;
+%!   -1/sqrt(2)*i, 1/sqrt(2)*i,0;
+%!     0,0,i];
+%! A = U * B * U'; 
+%! b = sum(A, 2);
+%! [x, flag] = minres (A, b, [], 3);
+%! assert (norm (A * x - b) / norm (b), 0, 1e-6);
+%! assert (flag, 0);
+
+%!test
 %! ## solve tridiagonal system, do not converge in 20 iterations
 %!
 %! N = 100;
@@ -496,3 +519,50 @@ endfunction
 %! assert (norm (x - X) / norm (X), 0, 1e-6);
 %! assert (flag, 0);
 %! assert (iter, 1);  # should converge in one iteration
+
+%!test
+%! ## test for algorithm accuracy and compatibility from matlab doc example
+%!
+%! n = 100;
+%! on = ones (n, 1); 
+%! A = spdiags ([-2*on 4*on -2*on], -1:1, n, n);
+%! b = sum (A, 2); 
+%! tol = 1e-10; 
+%! maxit = 50; 
+%! M1 = spdiags (4*on, 0, n, n);
+%! x = minres (A, b, tol, maxit, M1);
+%! assert (size (x), [100, 1]);
+%! assert (x,ones(100,1),1e-13);
+
+%!test
+%! ## solve indefinite diagonal system
+%! ## test for algorithm convergence rate from matlab doc example
+%! ## matlab minres converged at iteration 40, but minres here needs more
+%! ## pcg fails with this test
+%!
+%! A = diag([20:-1:1, -1:-1:-20]);
+%! b = sum(A,2);  
+%! tol = 1e-6; 
+%! maxit = 45; 
+%! [x, flag, relres, iter, resvec] = minres (A, b, tol, maxit);
+%! assert (flag, 0);
+%! assert (iter > 40);   
+%! assert (size (x), [40, 1]);
+%! assert (x,ones(40,1),1e-7);
+
+%!test
+%! ## solve indefinite hermitian system
+%!
+%! B = spdiags([50:-1:1, -1:-1:-50]', 0, 100, 100);
+%! on = ones(100, 1);
+%! P = spdiags([-i * on, on, i * on], [-1, 0, 1], 100, 100);
+%! [U,R] = qr(P);
+%! A = U * B * U';
+%! A = (A + A') / 2;
+%! b = sum(A,2);  
+%! tol = 1e-10; 
+%! maxit = 150; 
+%! [x, flag, relres, iter, resvec] = minres (A, b, tol, maxit);
+%! assert (flag, 0);
+%! assert (size (x), [100, 1]);
+%! assert (x,ones(100,1),1e-9);
