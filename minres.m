@@ -82,7 +82,9 @@
 ## @var{flag} reports on the convergence.  A value of 0 means the solution
 ## converged and the tolerance criterion given by @var{tol} is satisfied.
 ## A value of 1 means that the @var{maxit} limit for the iteration count was
-## reached.
+## reached. A value of 2 means that M is ill-conditioned.
+## A value of 3 means that minres stagnated. (Two consecutive iterates
+## were the same.)
 ##
 ## @item
 ## @var{relres} is the final relative residual,
@@ -176,7 +178,6 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
   
   Aisnum = isnumeric(A);
   if Aisnum
-    ## If A is a matrix
     [ma, na] = size(A);
     
     if (ma != na)
@@ -196,7 +197,6 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
   endif
 
   if (nargin >= 5) && !isempty(m1)
-    ## Preconditioner exists
     m1exist = true;
     misnum = isnumeric(m1);
       if (nargin >= 6) && !isempty(m2)
@@ -205,7 +205,6 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
         m2exist = false;
       endif
   else
-    ## Preconditioner does not exist
       m1exist = false;
       m2exist = false;
   endif
@@ -248,24 +247,6 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
     resvec = [resvec(1); 0];
     return
   endif
-  
-  if m1exist
-    if m2exist
-      if misnum
-        by = m2 \ (m1 \ b);
-      else
-        by = feval(m2, feval(m1, b, varargin{:}), varargin{:});
-      endif
-    else
-      if misnum
-        by = m1 \ b;
-      else
-        by = feval(m1, b, varargin{:});
-      endif
-    endif
-  else
-    by = b;
-  endif
 
   ## Initiation
   v_0 = zeros(n, 1);
@@ -273,46 +254,57 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
     if m1exist
       if m2exist
         if misnum
-          b0 = by - m2 \ (m1 \ (A * x0));
+          b0 = m2 \ (m1 \ (b - A * x0));
         else
-          b0 = by - feval(m2, feval(m1, A * x0, varargin{:}), varargin{:});
+          b0 = feval(m2, feval(m1, b - A * x0, varargin{:}), varargin{:});
         endif
       else
         if misnum
-          b0 = by - m1 \ (A * x0);
+          b0 = m1 \ (b - A * x0);
         else
-          b0 = by - feval(m1, A * x0, varargin{:});
+          b0 = feval(m1, b - A * x0, varargin{:});
         endif
       endif
     else
-      b0 = by - A * x0;
+      b0 = b - A * x0;
     endif
   else
     if m1exist
       if m2exist
         if misnum
-          b0 = by - m2 \ (m1 \ feval(A, x0, varargin{:}));
+          b0 = m2 \ (m1 \ (b - feval(A, x0, varargin{:})));
         else
-          b0 = by - feval(m2, feval(m1, feval(A, x0, varargin{:})),...
+          b0 = feval(m2, feval(m1, b - feval(A, x0, varargin{:})),...
           varargin{:});
         endif
       else
         if misnum
-          b0 = by - m1 \ feval(A, x0, varargin{:});
+          b0 = m1 \ (b - feval(A, x0, varargin{:}));
         else
-          b0 = by - feval(m1, feval(A, x0, varargin{:}), varargin{:});
+          b0 = feval(m1, b - feval(A, x0, varargin{:}), varargin{:});
         endif
       endif
     else
-      b0 = by - feval(A, x0, varargin{:});
+      b0 = b - feval(A, x0, varargin{:});
     endif
   endif
   beta(1) = norm(b0);
-  relres = beta(1) / norm(by);
+  if Aisnum
+    relres = norm(b - A * x0) / norm(b);
+  else
+    relres = norm(b - feval(A, x0, varargin{:})) / norm(b);
+  endif
+  x = x0;
   if (relres <= tol) || (beta(1) <= eps)
     ## If x0 is already good enouph
-    x = x0;
     flag = 0;
+    iter = 0;
+    resvec = [resvec(1)];
+    return
+  endif
+  if m1exist && (!all(isfinite(b0)))
+    ## M is ill-conditioned
+    flag = 2;
     iter = 0;
     resvec = [resvec(1)];
     return
@@ -401,6 +393,7 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
     else
        r = norm(feval(A, x, varargin{:}) - b);
     endif
+    relresn = relres;
     relres = r / norm(b);
     resvec(k + 1) = r;
     iter = k;
@@ -409,6 +402,11 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
        flag = 0;
        resvec = resvec(1: (k + 1));
        break
+    endif
+    if (resvec(k + 1) == resvec(k))
+      flag = 3;
+    elseif (flag == 3)
+      flag = 1;
     endif
     v_f = temp1 / beta(k + 1);
 
@@ -447,6 +445,33 @@ endfunction
 %! legend ("relative residual");
 
 %!test
+%! ## Check that all the subscripts works
+%!
+%! A = toeplitz (sparse ([2, 1 ,0, 0, 0]));
+%! b = A * ones (5, 1);
+%! M1 = diag (sqrt (diag (A)));
+%! M2 = M1; # M1 * M2 is the Jacobi preconditioner
+%! Afun = @(z) A*z;
+%! M1_fun = @(z) M1 \ z;
+%! M2_fun = @(z) M2 \ z;
+%! [x, flag, ~, iter] = minres (A,b);
+%! assert(flag, 0);
+%! [x, flag, ~ , iter] = minres (A, b, [], [], M1 * M2);
+%! assert(flag, 0);
+%! [x, flag, ~ , iter] = minres (A, b, [], [], M1, M2);
+%! assert(flag, 0);
+%! [x, flag] = minres (A, b, [], [], M1_fun, M2_fun);
+%! assert(flag, 0);
+%! [x, flag] = minres (Afun, b);
+%! assert(flag, 0);
+%! [x, flag] = minres (Afun, b,[],[], M1 * M2);
+%! assert(flag, 0);
+%! [x, flag] = minres (Afun, b,[],[], M1, M2);
+%! assert(flag, 0);
+%! [x, flag] = minres (Afun, b,[],[], M1_fun, M2_fun);
+%! assert(flag, 0);
+
+%!test
 %! ## solve small diagonal system
 %!
 %! N = 10;
@@ -473,20 +498,20 @@ endfunction
 %! A = diag([(-1):(N - 2)]); 
 %! b = sum(A, 2);
 %! [x, flag] = minres (A, b, [], N+1);
-%! assert (norm (A * x - b) / norm (b), 0, 1e-6);
+%! assert (norm (A * x - b) / norm (b), 0, 1e-10);
 %! assert (flag, 0);
 
 %!test
 %! ## solve small indefinite hermitian system
 %!
-%! B = diag([0;1;-2])
+%! B = diag([0;1;-2]);
 %! U = [1/sqrt(2), 1/sqrt(2), 0;
 %!   -1/sqrt(2)*i, 1/sqrt(2)*i,0;
 %!     0,0,i];
 %! A = U * B * U'; 
 %! b = sum(A, 2);
 %! [x, flag] = minres (A, b, [], 3);
-%! assert (norm (A * x - b) / norm (b), 0, 1e-6);
+%! assert (norm (A * x - b) / norm (b), 0, 1e-10);
 %! assert (flag, 0);
 
 %!test
