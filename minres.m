@@ -1,3 +1,21 @@
+## Copyright (C) 2017 Xie Rui
+##
+## This file is part of Octave.
+##
+## Octave is free software; you can redistribute it and/or modify it
+## under the terms of the GNU General Public License as published by
+## the Free Software Foundation; either version 3 of the License, or
+## (at your option) any later version.
+##
+## Octave is distributed in the hope that it will be useful, but
+## WITHOUT ANY WARRANTY; without even the implied warranty of
+## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+## GNU General Public License for more details.
+##
+## You should have received a copy of the GNU General Public License
+## along with Octave; see the file COPYING.  If not, see
+## <http://www.gnu.org/licenses/>.
+
 ## -*- texinfo -*-
 ## Usage
 ##
@@ -65,6 +83,8 @@
 ## applying the inverse of @var{m1} and @var{m2} to a vector.
 ## If @var{m1} is omitted or empty @code{[]} then no preconditioning is applied.
 ## If @var{m2} is omitted, @var{m} = @var{m1} will be used as a preconditioner.
+## @var{m1} and @var{m2} should have the same type here. That is, M1 and M2 are both 
+## matrices or both function handles.
 ##
 ## @item
 ## @var{x0} is the initial guess.  If @var{x0} is omitted or empty then the
@@ -84,7 +104,7 @@
 ## A value of 1 means that the @var{maxit} limit for the iteration count was
 ## reached. A value of 2 means that M is ill-conditioned.
 ## A value of 3 means that minres stagnated. (Two consecutive iterates
-## were the same.)
+## were the same.) A value of 4 means that A is not hermitian.
 ##
 ## @item
 ## @var{relres} is the final relative residual,
@@ -179,7 +199,10 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
   Aisnum = isnumeric(A);
   if Aisnum
     [ma, na] = size(A);
-    
+    flag = 1;
+    if !ishermitian(A, 1e-6)
+      flag = 4;
+    endif
     if (ma != na)
         print_usage();
     endif
@@ -221,7 +244,6 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
         
   ## Preallocation
   N = maxit + 1;
-  flag = 1;
 
   n = length(b);
   beta = zeros(N, 1);
@@ -241,7 +263,9 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
   if (isequal(b, zeros(n, 1)))
     ## If b is a zero vector
     x = zeros(mb, 1);
-    flag = 0;
+    if !(flag == 4)
+      flag = 0;
+    endif
     relres = NaN;
     iter = 0;
     resvec = [resvec(1); 0];
@@ -252,41 +276,57 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
   v_0 = zeros(n, 1);
   if Aisnum
     if m1exist
-      if m2exist
-        if misnum
-          b0 = m2 \ (m1 \ (b - A * x0));
+      try
+       if m2exist
+         if misnum
+           b0 = m2 \ (m1 \ (b - A * x0));
+         else
+           b0 = feval(m2, feval(m1, b - A * x0, varargin{:}), varargin{:});
+          endif
         else
-          b0 = feval(m2, feval(m1, b - A * x0, varargin{:}), varargin{:});
-        endif
-      else
-        if misnum
-          b0 = m1 \ (b - A * x0);
-        else
-          b0 = feval(m1, b - A * x0, varargin{:});
-        endif
-      endif
+         if misnum
+           b0 = m1 \ (b - A * x0);
+         else
+           b0 = feval(m1, b - A * x0, varargin{:});
+         endif
+       endif
+      catch
+        flag = 2;
+      end_try_catch
     else
       b0 = b - A * x0;
     endif
   else
     if m1exist
-      if m2exist
-        if misnum
-          b0 = m2 \ (m1 \ (b - feval(A, x0, varargin{:})));
+      try
+        if m2exist
+          if misnum
+            b0 = m2 \ (m1 \ (b - feval(A, x0, varargin{:})));
+          else
+            b0 = feval(m2, feval(m1, b - feval(A, x0, varargin{:})),...
+             varargin{:});
+          endif
         else
-          b0 = feval(m2, feval(m1, b - feval(A, x0, varargin{:})),...
-          varargin{:});
+          if misnum
+            b0 = m1 \ (b - feval(A, x0, varargin{:}));
+          else
+            b0 = feval(m1, b - feval(A, x0, varargin{:}), varargin{:});
+          endif
         endif
-      else
-        if misnum
-          b0 = m1 \ (b - feval(A, x0, varargin{:}));
-        else
-          b0 = feval(m1, b - feval(A, x0, varargin{:}), varargin{:});
-        endif
-      endif
+      catch
+        flag = 2;
+      end_try_catch
     else
       b0 = b - feval(A, x0, varargin{:});
     endif
+  endif
+  if (flag == 2)
+    ## M is ill-conditioned
+    x = x0;
+    flag = 2;
+    iter = 0;
+    resvec = [resvec(1)];
+    return
   endif
   beta(1) = norm(b0);
   if Aisnum
@@ -297,12 +337,14 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
   x = x0;
   if (relres <= tol) || (beta(1) <= eps)
     ## If x0 is already good enouph
-    flag = 0;
+    if !(flag == 4)
+      flag = 0;
+    endif
     iter = 0;
     resvec = [resvec(1)];
     return
   endif
-  if m1exist && (!all(isfinite(b0)))
+  if (m1exist && (!all(isfinite(b0))))||(flag == 2)
     ## M is ill-conditioned
     flag = 2;
     iter = 0;
@@ -322,41 +364,55 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
   for k = 1: (N - 1)
     if Aisnum
       if m1exist
-        if m2exist
-          if misnum
-            temp0 = m2 \ (m1 \ (A * v_n));
+        try
+          if m2exist
+            if misnum
+              temp0 = m2 \ (m1 \ (A * v_n));
+            else
+              temp0 = feval(m2, feval(m1, A * v_n, varargin{:}), varargin{:});
+            endif
           else
-            temp0 = feval(m2, feval(m1, A * v_n, varargin{:}), varargin{:});
+            if misnum
+              temp0 = m1 \ (A * v_n);
+            else
+              temp0 = feval(m1, A * v_n, varargin{:});
+            endif
           endif
-        else
-          if misnum
-            temp0 = m1 \ (A * v_n);
-          else
-            temp0 = feval(m1, A * v_n, varargin{:});
-          endif
-        endif
+        catch
+          flag = 2;
+        end_try_catch
       else
         temp0 = A * v_n;
       endif
     else
       if m1exist
-        if m2exist
-          if misnum
-            temp0 = m2 \ (m1 \ feval(A, v_n, varargin{:}));
+        try
+          if m2exist
+            if misnum
+              temp0 = m2 \ (m1 \ feval(A, v_n, varargin{:}));
+            else
+              temp0 = feval(m2, feval(m1, feval(A, v_n, varargin{:}),...
+              varargin{:}), varargin{:});
+            endif
           else
-            temp0 = feval(m2, feval(m1, feval(A, v_n, varargin{:}),...
-            varargin{:}), varargin{:});
+            if misnum
+              temp0 = m1 \ feval(A, v_n, varargin{:});
+            else
+              temp0 = feval(m1, feval(A, v_n, varargin{:}), varargin{:});
+            endif
           endif
-        else
-          if misnum
-            temp0 = m1 \ feval(A, v_n, varargin{:});
-          else
-            temp0 = feval(m1, feval(A, v_n, varargin{:}), varargin{:});
-          endif
-        endif
+        catch
+          flag = 2;
+        end_try_catch
       else
         temp0 = feval(A, v_n, varargin{:});
       endif
+    endif
+    if (flag == 2)||(m1exist && (!all(isfinite(temp0))))
+      flag = 2;
+      iter = k - 1;
+      resvec = resvec(1: k);
+      return
     endif
     alpha(k) = v_n' * temp0;
     temp1 = temp0 - alpha(k) * v_n - beta(k) * v_p;
@@ -399,11 +455,13 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
     iter = k;
     ## Check convergence
     if (relres <= tol) || (beta(k + 1) <= eps)
+      if !(flag == 4)
        flag = 0;
+      endif
        resvec = resvec(1: (k + 1));
        break
     endif
-    if (resvec(k + 1) == resvec(k))
+    if (resvec(k + 1) == resvec(k))&&!(flag == 4)
       flag = 3;
     elseif (flag == 3)
       flag = 1;
@@ -416,6 +474,9 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
     v_n = v_f;
 
   endfor 
+  if (iter == 1)
+    warning ("iteration converged too fast");
+  endif
 endfunction
 
 
@@ -428,7 +489,50 @@ endfunction
 %! y = A \ b;  # y is the true solution
 %! x = minres (A, b);
 %! printf ("The solution relative error is %g\n", norm (x - y) / norm (y));
+
+%!demo # simplest use
 %!
+%! n = 10;
+%! A = toeplitz (sparse ([1, 1], [1, 2], [2, 1], 1, n));
+%! b = A * ones (n, 1);
+%! M1 = ichol (A); # in this tridiagonal case it corresponds to chol (A)'
+%! M2 = M1';
+%! M = M1 * M2;
+%! x = minres (A, b);
+%! Afun = @(x) A * x;
+%! x = minres (Afun, b);
+%! x = minres (A, b, 1e-6, 100, M);
+%! x = minres (A, b, 1e-6, 100, M1, M2);
+%! Mfun = @(x) M \ x;
+%! x = minres (Afun, b, 1e-6, 100, Mfun);
+%! M1fun = @(x) M1 \ x;
+%! M2fun = @(x) M2 \ x;
+%! x = minres (Afun, b, 1e-6, 100, M1fun, M2fun);
+%! function y = Ap (A, x, p) # compute A^p * x
+%!    y = x;
+%!    for i = 1:p
+%!      y = A * y;
+%!    endfor
+%!  endfunction
+%! Afun = @(x, p) Ap (A, x, p);
+%! x = minres (Afun, b, [], [], [], [], [], 2); # solution of A^2 * x = b
+
+%!demo
+%!
+%! n = 10;
+%! A = toeplitz (sparse ([1, 1], [1, 2], [2, 1], 1, n));
+%! b = A * ones (n, 1);
+%! M1 = ichol (A + 0.1 * eye (n)); # factorization of A perturbed
+%! M2 = M1';
+%! M = M1 * M2;
+%!
+%! ## reference solution computed by pcg after two iterations
+%! [x_ref, fl] = minres (A, b, [], 2, M);
+%! x_ref
+%!
+%! ## split preconditioning
+%! [y, fl] = minres ((M1 \ A) / M2, M1 \ b, [], 2);
+%! x = M2 \ y # compare x and x_ref
 
 %!demo
 %! ## Full output from minres
@@ -444,32 +548,6 @@ endfunction
 %! xlabel ("Iteration"); ylabel ("log(||b-Ax||/||b||)");
 %! legend ("relative residual");
 
-%!test
-%! ## Check that all the subscripts works
-%!
-%! A = toeplitz (sparse ([2, 1 ,0, 0, 0]));
-%! b = A * ones (5, 1);
-%! M1 = diag (sqrt (diag (A)));
-%! M2 = M1; # M1 * M2 is the Jacobi preconditioner
-%! Afun = @(z) A*z;
-%! M1_fun = @(z) M1 \ z;
-%! M2_fun = @(z) M2 \ z;
-%! [x, flag, ~, iter] = minres (A,b);
-%! assert(flag, 0);
-%! [x, flag, ~ , iter] = minres (A, b, [], [], M1 * M2);
-%! assert(flag, 0);
-%! [x, flag, ~ , iter] = minres (A, b, [], [], M1, M2);
-%! assert(flag, 0);
-%! [x, flag] = minres (A, b, [], [], M1_fun, M2_fun);
-%! assert(flag, 0);
-%! [x, flag] = minres (Afun, b);
-%! assert(flag, 0);
-%! [x, flag] = minres (Afun, b,[],[], M1 * M2);
-%! assert(flag, 0);
-%! [x, flag] = minres (Afun, b,[],[], M1, M2);
-%! assert(flag, 0);
-%! [x, flag] = minres (Afun, b,[],[], M1_fun, M2_fun);
-%! assert(flag, 0);
 
 %!test
 %! ## solve small diagonal system
@@ -591,3 +669,137 @@ endfunction
 %! assert (flag, 0);
 %! assert (size (x), [100, 1]);
 %! assert (x,ones(100,1),1e-9);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## Check that all the subscripts works
+%! ## M1 and M2 should have the same type here. That is, M1 and M2 are both 
+%! ## matrices or both function handles.
+%!
+%! A = toeplitz (sparse ([2, 1 ,0, 0, 0]));
+%! b = A * ones (5, 1);
+%! M1 = diag (sqrt (diag (A)));
+%! M2 = M1; # M1 * M2 is the Jacobi preconditioner
+%! Afun = @(z) A*z;
+%! M1_fun = @(z) M1 \ z;
+%! M2_fun = @(z) M2 \ z;
+%! [x, flag, ~, iter] = minres (A,b);
+%! assert(flag, 0);
+%! [x, flag, ~ , iter] = minres (A, b, [], [], M1 * M2);
+%! assert(flag, 0);
+%! [x, flag, ~ , iter] = minres (A, b, [], [], M1, M2);
+%! assert(flag, 0);
+%! [x, flag] = minres (A, b, [], [], M1_fun, M2_fun);
+%! assert(flag, 0);
+%! [x, flag] = minres (Afun, b);
+%! assert(flag, 0);
+%! [x, flag] = minres (Afun, b,[],[], M1 * M2);
+%! assert(flag, 0);
+%! [x, flag] = minres (Afun, b,[],[], M1, M2);
+%! assert(flag, 0);
+%! [x, flag] = minres (Afun, b,[],[], M1_fun, M2_fun);
+%! assert(flag, 0);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## solve small diagonal system
+%!
+%! N = 10;
+%! A = diag ([1:N]); b = rand (N, 1);
+%! X = A \ b;  # X is the true solution
+%! [x, flag] = minres (A, b, [], N+1);
+%! assert (norm (x - X) / norm (X), 0, 1e-10);
+%! assert (flag, 0);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## A not positive definite
+%!
+%! N = 10;
+%! A = -diag([1:N]); b = rand (N, 1);
+%! X = A \ b;  # X is the true solution
+%! [x, flag] = minres (A, b, [], N+1);
+%! assert (flag, 0);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## A is a non-Hermitian matrix
+%! ## minres recognized the wrong type of matrix
+%!
+%! N = 10;
+%! A = diag (1:N) + 1i*1e-04*rand (N);
+%! b = ones (N, 1);
+%! [x,flag] = minres (A, b, []);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## A has a small imaginary part
+%!
+%! N = 10;
+%! A = diag (1:N) + 1i*1e-10*rand (N);
+%! b = ones (N, 1);
+%! [x,flag] = minres (A, b, [], N+1);
+%! assert (flag, 0);
+%! assert (x, A\b, -1e-6);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## minres solves linear system with A Hermitian positive definite
+%!
+%! N = 20;
+%! A = 2*rand (N)-1 + 1i*(2*rand (N)-1);
+%! A = A'*A;
+%! b = A * ones (N,1);
+%! Hermitian_A = ishermitian (A);
+%! [x,flag] = minres (A, b, [], 2*N);
+%! assert (Hermitian_A, true)
+%! assert (flag, 0);
+%! assert (x, ones (N, 1), -1e-4);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## minres solves preconditioned linear system with A HPD
+%!
+%! N = 20;
+%! A = 2*rand (N)-1 + 1i*(2*rand (N)-1);
+%! A = A' * A;
+%! b = A * ones (N,1);
+%! M2 = chol (A + 0.1 * eye (N)); # factor of a perturbed matrix
+%! M = M2' * M2;
+%! Hermitian_A = ishermitian (A);
+%! Hermitian_M = ishermitian (M);
+%! [x,flag] = minres (A, b, [], 2*N, M);
+%! assert (Hermitian_A, true);
+%! assert (Hermitian_M, true);
+%! assert (flag, 0);
+%! assert (x, ones (N, 1), -1e-4);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## minres recognizes that the preconditioner matrix is singular
+%!
+%! N = 3;
+%! A = rand(3);
+%! A = A*A';
+%! M = [1 0 0; 0 1 0; 0 0 0]; # the last rows is zero
+%! [x,flag] = minres (A, ones(3,1), [], [], M);
+%! assert (flag, 2);
+
+%!test
+%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
+%! ## and Cristiano Dorigo
+%! ## b is zero vector, so minres returns a zero vector
+%!
+%! A = rand (4);
+%! A = A' * A;
+%! [x, flag] = minres (A, zeros (4, 1), [], [], [], [], ones (4, 1));
+%! assert (x, zeros (4, 1))
+
