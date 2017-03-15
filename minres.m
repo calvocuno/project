@@ -46,6 +46,8 @@
 ## [x, flag, relres, iter] = minres (A, b, @dots{})
 ## @item
 ## [x, flag, relres, iter, resvec] = minres (A, b, @dots{})
+## @item
+## [x, flag, relres, iter, resvec, resveccg] = minres (A, b, @dots{})
 ## @end itemize
 ##
 ##
@@ -83,8 +85,6 @@
 ## applying the inverse of @var{m1} and @var{m2} to a vector.
 ## If @var{m1} is omitted or empty @code{[]} then no preconditioning is applied.
 ## If @var{m2} is omitted, @var{m} = @var{m1} will be used as a preconditioner.
-## @var{m1} and @var{m2} should have the same type here. That is, M1 and M2 are both 
-## matrices or both function handles.
 ##
 ## @item
 ## @var{x0} is the initial guess.  If @var{x0} is omitted or empty then the
@@ -116,6 +116,11 @@
 ## @item
 ## @var{resvec(i)} is the Euclidean norm of the residual after the
 ## (@var{i}-1)-th iteration, @code{@var{i} = 1, 2, @dots{}, @var{iter}+1}.
+##
+## @item
+## @var{resveccg(i)} is the Euclidean norm of the Conjugate Gradients residual 
+## after the (@var{i}-1)-th iteration, 
+## @code{@var{i} = 1, 2, @dots{}, @var{iter}+1}.
 ##
 ## @end itemize
 ##
@@ -184,7 +189,7 @@
 ##
 ## @end enumerate
 
-function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
+function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   maxit, m1, m2, x0, varargin)
   ## Check the inputs
   if (nargin < 2)
@@ -196,10 +201,10 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
         print_usage();
   endif
   
+  flag = 1;
   Aisnum = isnumeric(A);
   if Aisnum
     [ma, na] = size(A);
-    flag = 1;
     if !ishermitian(A, 1e-6)
       flag = 4;
     endif
@@ -221,15 +226,19 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
 
   if (nargin >= 5) && !isempty(m1)
     m1exist = true;
-    misnum = isnumeric(m1);
+    m1isnum = isnumeric(m1);
       if (nargin >= 6) && !isempty(m2)
         m2exist = true;
+        m2isnum = isnumeric(m2);
       else
         m2exist = false;
+        m2isnum = false;
       endif
   else
       m1exist = false;
       m2exist = false;
+      m1isnum = false;
+      m2isnum = false;
   endif
 
   if (nargin >= 7) && !isempty(x0)
@@ -254,11 +263,13 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
   c = zeros(N, 1);
   s = zeros(N, 1);
   resvec = zeros(N, 1);
+  resveccg = zeros(N, 1);
   if Aisnum
       resvec(1) = norm(A * x0 - b);
   else
       resvec(1) = norm(feval(A, x0, varargin{:}) - b);
   endif
+  resveccg(1) = resvec(1);
 
   if (isequal(b, zeros(n, 1)))
     ## If b is a zero vector
@@ -269,156 +280,112 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
     relres = NaN;
     iter = 0;
     resvec = [resvec(1); 0];
+    resveccg = resvec;
     return
   endif
 
   ## Initiation
-  v_0 = zeros(n, 1);
   if Aisnum
-    if m1exist
-      try
-       if m2exist
-         if misnum
-           b0 = m2 \ (m1 \ (b - A * x0));
-         else
-           b0 = feval(m2, feval(m1, b - A * x0, varargin{:}), varargin{:});
-          endif
-        else
-         if misnum
-           b0 = m1 \ (b - A * x0);
-         else
-           b0 = feval(m1, b - A * x0, varargin{:});
-         endif
-       endif
-      catch
-        flag = 2;
-      end_try_catch
-    else
-      b0 = b - A * x0;
-    endif
+    rM = b - A * x0;
   else
-    if m1exist
-      try
-        if m2exist
-          if misnum
-            b0 = m2 \ (m1 \ (b - feval(A, x0, varargin{:})));
-          else
-            b0 = feval(m2, feval(m1, b - feval(A, x0, varargin{:})),...
-             varargin{:});
-          endif
-        else
-          if misnum
-            b0 = m1 \ (b - feval(A, x0, varargin{:}));
-          else
-            b0 = feval(m1, b - feval(A, x0, varargin{:}), varargin{:});
-          endif
-        endif
-      catch
-        flag = 2;
-      end_try_catch
-    else
-      b0 = b - feval(A, x0, varargin{:});
-    endif
+    rM = b - feval(A, x0, varargin{:});
   endif
-  if (flag == 2)
+  if m1exist
+    try
+      warning("error","Octave:singular-matrix","local");
+      if m1isnum
+        b0 = m1 \ rM;
+      else
+        b0 = feval(m1, rM, varargin{:});
+      endif
+      if m2exist
+        if m2isnum
+          b0 = m2 \ b0;
+        else
+          b0 = feval(m2, b0, varargin{:});
+        endif
+      endif
+    catch
+      flag = 2;
+    end_try_catch
+  else
+    b0 = rM;
+  endif
+  
+  if (flag == 2)||(m1exist && (!all(isfinite(b0))))
     ## M is ill-conditioned
     x = x0;
-    flag = 2;
     iter = 0;
-    resvec = [resvec(1)];
+    resvec = resvec(1);
+    resveccg = resveccg(1);
     return
   endif
+  
   beta(1) = norm(b0);
-  if Aisnum
-    relres = norm(b - A * x0) / norm(b);
-  else
-    relres = norm(b - feval(A, x0, varargin{:})) / norm(b);
-  endif
+  normb = norm(b);
+  relres = resvec(1) / normb;
   x = x0;
+  
   if (relres <= tol) || (beta(1) <= eps)
     ## If x0 is already good enouph
     if !(flag == 4)
       flag = 0;
     endif
     iter = 0;
-    resvec = [resvec(1)];
+    resvec = resvec(1);
+    resveccg = resveccg(1);
     return
   endif
-  if (m1exist && (!all(isfinite(b0))))||(flag == 2)
-    ## M is ill-conditioned
-    flag = 2;
-    iter = 0;
-    resvec = [resvec(1)];
-    return
-  endif
-  v_1 = b0 / beta(1);
         
-  v_p = v_0;
-  v_n = v_1;
+  v_p = zeros(n, 1);
+  v_n = b0 / beta(1);
   temp2 = beta(1);
   m_p = zeros(n, 1);
   m_pp = zeros(n, 1);
+  Am_p = zeros(n, 1);
+  Am_pp = zeros(n, 1);
   x = x0;
 
   ## Iteration
   for k = 1: (N - 1)
     if Aisnum
-      if m1exist
-        try
-          if m2exist
-            if misnum
-              temp0 = m2 \ (m1 \ (A * v_n));
-            else
-              temp0 = feval(m2, feval(m1, A * v_n, varargin{:}), varargin{:});
-            endif
-          else
-            if misnum
-              temp0 = m1 \ (A * v_n);
-            else
-              temp0 = feval(m1, A * v_n, varargin{:});
-            endif
-          endif
-        catch
-          flag = 2;
-        end_try_catch
-      else
-        temp0 = A * v_n;
-      endif
+      Av_n = A * v_n;
     else
-      if m1exist
-        try
-          if m2exist
-            if misnum
-              temp0 = m2 \ (m1 \ feval(A, v_n, varargin{:}));
-            else
-              temp0 = feval(m2, feval(m1, feval(A, v_n, varargin{:}),...
-              varargin{:}), varargin{:});
-            endif
-          else
-            if misnum
-              temp0 = m1 \ feval(A, v_n, varargin{:});
-            else
-              temp0 = feval(m1, feval(A, v_n, varargin{:}), varargin{:});
-            endif
-          endif
-        catch
-          flag = 2;
-        end_try_catch
-      else
-        temp0 = feval(A, v_n, varargin{:});
-      endif
+      Av_n = feval(A, v_n, varargin{:});
     endif
-    if (flag == 2)||(m1exist && (!all(isfinite(temp0))))
+    if m1exist
+      try
+        warning("error","Octave:singular-matrix","local");
+        if m1isnum
+          MAv_n = m1 \ Av_n;
+        else
+          MAv_n = feval(m1, Av_n, varargin{:});
+        endif
+        if m2exist
+          if m2isnum
+            MAv_n = m2 \ MAv_n;
+          else
+            MAv_n = feval(m2, MAv_n, varargin{:});
+          endif
+        endif
+      catch
+        flag = 2;
+      end_try_catch
+    else
+      MAv_n = Av_n;
+    endif
+    
+    if (flag == 2)||(m1exist && (!all(isfinite(MAv_n))))
       flag = 2;
       iter = k - 1;
       resvec = resvec(1: k);
+      resvec = resveccg(1: k);
       return
     endif
-    alpha(k) = v_n' * temp0;
-    temp1 = temp0 - alpha(k) * v_n - beta(k) * v_p;
+    
+    alpha(k) = v_n' * MAv_n;
+    temp1 = MAv_n - alpha(k) * v_n - beta(k) * v_p;
     beta(k + 1) = norm(temp1);
-    
-    
 
     if k > 2
        epsilon(k) = s(k - 2) * beta(k);
@@ -438,41 +405,45 @@ function [x, flag, relres, iter, resvec]  = minres(A, b, tol, ...
     c(k) = gamma_h / gamma(k);
     s(k) = beta(k + 1) / gamma(k);
 
-    m = 1 / gamma(k) * (v_n - epsilon(k) * m_pp - delta(k) * m_p);
+    m = (v_n - epsilon(k) * m_pp - delta(k) * m_p) / gamma(k);
+    Am = (Av_n - epsilon(k) * Am_pp - delta(k) * Am_p) / gamma(k);
 
     x = x + m * temp2 * c(k);
-    temp2 = temp2 * s(k);
-
+    rM = rM - Am * temp2 * c(k);
     
-    if Aisnum
-       r = norm(A * x - b);
-    else
-       r = norm(feval(A, x, varargin{:}) - b);
-    endif
+    normrM = norm(rM);
+    temp2 = temp2 * s(k);
+    
+    rcg = rM - temp2 * s(k) / c(k) * Am;
+    
     relresn = relres;
-    relres = r / norm(b);
-    resvec(k + 1) = r;
+    relres = normrM / normb;
+    resvec(k + 1) = normrM;
+    resveccg(k + 1) = norm(rcg);
     iter = k;
     ## Check convergence
     if (relres <= tol) || (beta(k + 1) <= eps)
       if !(flag == 4)
        flag = 0;
       endif
-       resvec = resvec(1: (k + 1));
-       break
+      resvec = resvec(1: (k + 1));
+      resveccg = resveccg(1: (k + 1));
+      break
     endif
+    
     if (resvec(k + 1) == resvec(k))&&!(flag == 4)
       flag = 3;
     elseif (flag == 3)
       flag = 1;
     endif
-    v_f = temp1 / beta(k + 1);
 
     m_pp = m_p;
     m_p = m;
+    Am_pp = Am_p;
+    Am_p = Am;
     v_p = v_n;
-    v_n = v_f;
-
+    v_n = temp1 / beta(k + 1);
+    
   endfor 
   if (iter == 1)
     warning ("iteration converged too fast");
@@ -640,7 +611,7 @@ endfunction
 %!test
 %! ## solve indefinite diagonal system
 %! ## test for algorithm convergence rate from matlab doc example
-%! ## matlab minres converged at iteration 40, but minres here needs more
+%! ## matlab minres converged at iteration 40, so did minres here
 %! ## pcg fails with this test
 %!
 %! A = diag([20:-1:1, -1:-1:-20]);
@@ -674,8 +645,6 @@ endfunction
 %! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
 %! ## and Cristiano Dorigo
 %! ## Check that all the subscripts works
-%! ## M1 and M2 should have the same type here. That is, M1 and M2 are both 
-%! ## matrices or both function handles.
 %!
 %! A = toeplitz (sparse ([2, 1 ,0, 0, 0]));
 %! b = A * ones (5, 1);
@@ -692,11 +661,19 @@ endfunction
 %! assert(flag, 0);
 %! [x, flag] = minres (A, b, [], [], M1_fun, M2_fun);
 %! assert(flag, 0);
+%! [x, flag] = minres (A, b,[],[], M1_fun, M2);
+%! assert(flag, 0);
+%! [x, flag] = minres (A, b,[],[], M1, M2_fun);
+%! assert(flag, 0);
 %! [x, flag] = minres (Afun, b);
 %! assert(flag, 0);
 %! [x, flag] = minres (Afun, b,[],[], M1 * M2);
 %! assert(flag, 0);
 %! [x, flag] = minres (Afun, b,[],[], M1, M2);
+%! assert(flag, 0);
+%! [x, flag] = pcg (Afun, b,[],[], M1_fun, M2);
+%! assert(flag, 0);
+%! [x, flag] = pcg (Afun, b,[],[], M1, M2_fun);
 %! assert(flag, 0);
 %! [x, flag] = minres (Afun, b,[],[], M1_fun, M2_fun);
 %! assert(flag, 0);
@@ -802,4 +779,3 @@ endfunction
 %! A = A' * A;
 %! [x, flag] = minres (A, zeros (4, 1), [], [], [], [], ones (4, 1));
 %! assert (x, zeros (4, 1))
-
