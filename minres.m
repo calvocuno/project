@@ -408,13 +408,32 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     iter = k;
     ## Check convergence
     if (relres <= tol) || (beta(k + 1) <= eps)
-      flag = 0;
-      resvec = resvec(1: (k + 1));
-      resveccg = resveccg(1: (k + 1));
-      break
+      ## Calculate x using y
+      if m2exist
+        if m2isnum
+          x = m2 \ y + x0;
+        else
+          x = feval(m2, y, varargin{:}) + x0;
+        endif
+      else
+        x = y + x0;
+      endif
+      ## Precisely calculate relres
+      if Aisnum
+        resvec(end) = norm(b - A * x);
+      else
+        resvec(end) = norm(b - feval(A, x, varargin{:}));
+      endif
+      relres = resvec(end) / normb;
+      if (relres <= tol) || (beta(k + 1) <= eps)
+        flag = 0;
+        resvec = resvec(1: (k + 1));
+        resveccg = resveccg(1: (k + 1));
+        break
+      endif
     endif
     
-    ## Check stagnated
+    ## Check stagnation
     if norm(resvec(k+1)-resvec(k)) <= eps * norm(resvec(k+1))
       flag = 3;
     elseif (flag == 3)
@@ -431,14 +450,14 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   endfor 
   
   ## Calculate x using y
-  if m2exist
-    if m2isnum
-      x = m2 \ y + x0;
-    else
-      x = feval(m2, y, varargin{:}) + x0;
-    endif
+  if (flag != 0) && m2exist
+     if m2isnum
+        x = m2 \ y + x0;
+     else
+        x = feval(m2, y, varargin{:}) + x0;
+     endif
   else
-    x = y + x0;
+     x = y + x0;
   endif
   
   if (iter == 1)
