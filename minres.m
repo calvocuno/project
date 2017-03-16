@@ -77,14 +77,19 @@
 ## is omitted or empty then a value of 100 is used.
 ##
 ## @item
-## @var{m} = @var{m1} * @var{m2} is the preconditioning matrix, so that
-## the iteration is (theoretically) equivalent to solving by @code{minres}
-## @w{@code{@var{P} * @var{x} = @var{m} \ @var{b}}}, with
-## @w{@code{@var{P} = @var{m} \ @var{A}}}. Instead of matrices @var{m1} and
+## @var{m} = @var{m1} * @var{m2} is the preconditioning matrix.
+## Instead of matrices @var{m1} and
 ## @var{m2}, the user may pass two functions which return the results of
 ## applying the inverse of @var{m1} and @var{m2} to a vector.
 ## If @var{m1} is omitted or empty @code{[]} then no preconditioning is applied.
-## If @var{m2} is omitted, @var{m} = @var{m1} will be used as a preconditioner.
+## @var{m1} and @var{m2} are used as split preconditioner,
+## i.e. the iteration is (theoretically) equivalent to solving by  @code{minres}
+## @w{@code{inv (@var{m1}) * @var{A} * inv (@var{m2}) * @var{y} = inv(@var{m1}) * @var{b}}},
+## with @code{@var{x} = inv (@var{m2}) * @var{y}}. 
+## If @var{m2} is omitted, @var{m} = @var{m1} will be used as a left
+## preconditioner, i.e. the iteration is (theoretically) equivalent to solving
+## by @code{minres} @w{@code{inv (@var{m1}) * @var{A} * @var{x} = inv(@var{m1}) * @var{b}}}. 
+## 
 ##
 ## @item
 ## @var{x0} is the initial guess.  If @var{x0} is omitted or empty then the
@@ -293,11 +298,11 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
       else
         b0 = feval(m1, rM, varargin{:});
       endif
-      if m2exist
+      if m2exist # Check that m2 is not singular
         if m2isnum
-          b0 = m2 \ b0;
+          b1 = m2 \ b0;
         else
-          b0 = feval(m2, b0, varargin{:});
+          b1 = feval(m2, b0, varargin{:});
         endif
       endif
     catch
@@ -306,9 +311,7 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   else
     b0 = rM;
   endif
-  
-  if (flag == 2)||(m1exist && (!all(isfinite(b0))))
-    ## M is ill-conditioned
+  if (flag == 2)||(m1exist && (!all(isfinite(b0)))) # If m is singular
     x = x0;
     iter = 0;
     resvec = resvec(1);
@@ -319,10 +322,9 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   beta(1) = norm(b0);
   normb = norm(b);
   relres = resvec(1) / normb;
-  x = x0;
   
-  if (relres <= tol) || (beta(1) <= eps)
-    ## If x0 is already good enouph
+    ## Check whether x0 is already good enouph
+  if (relres <= tol) || (beta(1) <= eps) 
     flag = 0;
     iter = 0;
     resvec = resvec(1);
@@ -335,36 +337,40 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   temp2 = beta(1);
   m_p = zeros(n, 1);
   m_pp = zeros(n, 1);
-  Am_p = zeros(n, 1);
-  Am_pp = zeros(n, 1);
-  x = x0;
+  AM2m_p = zeros(n, 1);
+  AM2m_pp = zeros(n, 1);
+  y = zeros(n ,1);
 
   ## Iteration
   for k = 1: (N - 1)
-    if Aisnum
-      Av_n = A * v_n;
+    if m2exist
+      if m2isnum
+        M2v_n = m2 \ v_n;
+      else
+        M2v_n = feval(m2, v_n, varargin{:});
+      endif
     else
-      Av_n = feval(A, v_n, varargin{:});
-    endif
-    if m1exist
-        if m1isnum
-          MAv_n = m1 \ Av_n;
-        else
-          MAv_n = feval(m1, Av_n, varargin{:});
-        endif
-        if m2exist
-          if m2isnum
-            MAv_n = m2 \ MAv_n;
-          else
-            MAv_n = feval(m2, MAv_n, varargin{:});
-          endif
-        endif
-    else
-      MAv_n = Av_n;
+      M2v_n = v_n;
     endif
     
-    alpha(k) = v_n' * MAv_n;
-    temp1 = MAv_n - alpha(k) * v_n - beta(k) * v_p;
+    if Aisnum
+      AM2v_n = A * M2v_n;
+    else
+      AM2v_n = feval(A, M2v_n, varargin{:});
+    endif
+    
+    if m1exist
+      if m1isnum
+        M1AM2v_n = m1 \ AM2v_n;
+      else
+        M1AM2v_n = feval(m1, AM2v_n, varargin{:});
+      endif
+    else
+      M1AM2v_n = AM2v_n;
+    endif
+    
+    alpha(k) = v_n' * M1AM2v_n;
+    temp1 = M1AM2v_n - alpha(k) * v_n - beta(k) * v_p;
     beta(k + 1) = norm(temp1);
 
     if k > 2
@@ -386,17 +392,16 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     s(k) = beta(k + 1) / gamma(k);
 
     m = (v_n - epsilon(k) * m_pp - delta(k) * m_p) / gamma(k);
-    Am = (Av_n - epsilon(k) * Am_pp - delta(k) * Am_p) / gamma(k);
+    AM2m = (AM2v_n - epsilon(k) * AM2m_pp - delta(k) * AM2m_p) / gamma(k);
 
-    x = x + m * temp2 * c(k);
-    rM = rM - Am * temp2 * c(k);
+    y = y + m * temp2 * c(k);
+    rM = rM - AM2m * temp2 * c(k);
     
     normrM = norm(rM);
     temp2 = temp2 * s(k);
     
-    rcg = rM - temp2 * s(k) / c(k) * Am;
+    rcg = rM - temp2 * s(k) / c(k) * AM2m;
     
-    relresn = relres;
     relres = normrM / normb;
     resvec(k + 1) = normrM;
     resveccg(k + 1) = norm(rcg);
@@ -409,6 +414,7 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
       break
     endif
     
+    ## Check stagnated
     if norm(resvec(k+1)-resvec(k)) <= eps * norm(resvec(k+1))
       flag = 3;
     elseif (flag == 3)
@@ -417,12 +423,23 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
 
     m_pp = m_p;
     m_p = m;
-    Am_pp = Am_p;
-    Am_p = Am;
+    AM2m_pp = AM2m_p;
+    AM2m_p = AM2m;
     v_p = v_n;
     v_n = temp1 / beta(k + 1);
     
   endfor 
+  
+  ## Calculate x using y
+  if m2exist
+    if m2isnum
+      x = m2 \ y + x0;
+    else
+      x = feval(m2, y, varargin{:}) + x0;
+    endif
+  else
+    x = y + x0;
+  endif
   
   if (iter == 1)
     warning ("iteration converged too fast");
