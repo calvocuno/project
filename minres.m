@@ -104,7 +104,7 @@
 ## A value of 1 means that the @var{maxit} limit for the iteration count was
 ## reached. A value of 2 means that M is ill-conditioned.
 ## A value of 3 means that minres stagnated. (Two consecutive iterates
-## were the same.) A value of 4 means that A is not hermitian.
+## were the same.)
 ##
 ## @item
 ## @var{relres} is the final relative residual,
@@ -205,9 +205,6 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   Aisnum = isnumeric(A);
   if Aisnum
     [ma, na] = size(A);
-    if !ishermitian(A, 1e-6)
-      flag = 4;
-    endif
     if (ma != na)
         print_usage();
     endif
@@ -274,9 +271,7 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   if (isequal(b, zeros(n, 1)))
     ## If b is a zero vector
     x = zeros(mb, 1);
-    if !(flag == 4)
-      flag = 0;
-    endif
+    flag = 0;
     relres = NaN;
     iter = 0;
     resvec = [resvec(1); 0];
@@ -328,9 +323,7 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   
   if (relres <= tol) || (beta(1) <= eps)
     ## If x0 is already good enouph
-    if !(flag == 4)
-      flag = 0;
-    endif
+    flag = 0;
     iter = 0;
     resvec = resvec(1);
     resveccg = resveccg(1);
@@ -354,8 +347,6 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
       Av_n = feval(A, v_n, varargin{:});
     endif
     if m1exist
-      try
-        warning("error","Octave:singular-matrix","local");
         if m1isnum
           MAv_n = m1 \ Av_n;
         else
@@ -368,19 +359,8 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
             MAv_n = feval(m2, MAv_n, varargin{:});
           endif
         endif
-      catch
-        flag = 2;
-      end_try_catch
     else
       MAv_n = Av_n;
-    endif
-    
-    if (flag == 2)||(m1exist && (!all(isfinite(MAv_n))))
-      flag = 2;
-      iter = k - 1;
-      resvec = resvec(1: k);
-      resvec = resveccg(1: k);
-      return
     endif
     
     alpha(k) = v_n' * MAv_n;
@@ -423,15 +403,13 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     iter = k;
     ## Check convergence
     if (relres <= tol) || (beta(k + 1) <= eps)
-      if !(flag == 4)
-       flag = 0;
-      endif
+      flag = 0;
       resvec = resvec(1: (k + 1));
       resveccg = resveccg(1: (k + 1));
       break
     endif
     
-    if (resvec(k + 1) == resvec(k))&&!(flag == 4)
+    if norm(resvec(k+1)-resvec(k)) <= eps * norm(resvec(k+1))
       flag = 3;
     elseif (flag == 3)
       flag = 1;
@@ -445,6 +423,7 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     v_n = temp1 / beta(k + 1);
     
   endfor 
+  
   if (iter == 1)
     warning ("iteration converged too fast");
   endif
@@ -737,7 +716,7 @@ endfunction
 %! [x,flag] = minres (A, b, [], 2*N);
 %! assert (Hermitian_A, true)
 %! assert (flag, 0);
-%! assert (x, ones (N, 1), -1e-4);
+%! assert (x, ones (N, 1), -1e-3);
 
 %!test
 %! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
@@ -756,7 +735,7 @@ endfunction
 %! assert (Hermitian_A, true);
 %! assert (Hermitian_M, true);
 %! assert (flag, 0);
-%! assert (x, ones (N, 1), -1e-4);
+%! assert (x, ones (N, 1), -1e-3);
 
 %!test
 %! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
