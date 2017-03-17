@@ -82,13 +82,11 @@
 ## @var{m2}, the user may pass two functions which return the results of
 ## applying the inverse of @var{m1} and @var{m2} to a vector.
 ## If @var{m1} is omitted or empty @code{[]} then no preconditioning is applied.
-## @var{m1} and @var{m2} are used as split preconditioner,
+## @var{m} is used as split preconditioner,
 ## i.e. the iteration is (theoretically) equivalent to solving by  @code{minres}
-## @w{@code{inv (@var{m1}) * @var{A} * inv (@var{m2}) * @var{y} = inv(@var{m1}) * @var{b}}},
-## with @code{@var{x} = inv (@var{m2}) * @var{y}}. 
-## If @var{m2} is omitted, @var{m} = @var{m1} will be used as a left
-## preconditioner, i.e. the iteration is (theoretically) equivalent to solving
-## by @code{minres} @w{@code{inv (@var{m1}) * @var{A} * @var{x} = inv(@var{m1}) * @var{b}}}. 
+## @w{@code{inv (@var{p1}) * @var{A} * inv (@var{p2}) * @var{y} = inv(@var{p1}) * @var{b}}},
+## with @code{@var{x} = inv (@var{p2}) * @var{y}}. 
+## If @var{m2} is omitted, then @var{m} = @var{m1}.
 ## 
 ##
 ## @item
@@ -294,24 +292,24 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     try
       warning("error","Octave:singular-matrix","local");
       if m1isnum
-        b0 = m1 \ rM;
+        MrM = m1 \ rM;
       else
-        b0 = feval(m1, rM, varargin{:});
+        MrM = feval(m1, rM, varargin{:});
       endif
-      if m2exist # Check that m2 is not singular
+      if m2exist
         if m2isnum
-          b1 = m2 \ b0;
+          MrM = m2 \ MrM;
         else
-          b1 = feval(m2, b0, varargin{:});
+          MrM = feval(m2, MrM, varargin{:});
         endif
       endif
     catch
       flag = 2;
     end_try_catch
   else
-    b0 = rM;
+    MrM = rM;
   endif
-  if (flag == 2)||(m1exist && (!all(isfinite(b0)))) # If m is singular
+  if (flag == 2)||(m1exist && (!all(isfinite(MrM)))) # If m is singular
     x = x0;
     iter = 0;
     resvec = resvec(1);
@@ -319,7 +317,7 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     return
   endif
   
-  beta(1) = norm(b0);
+  beta(1) = sqrt(rM' * MrM);
   normb = norm(b);
   relres = resvec(1) / normb;
   
@@ -333,45 +331,65 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
   endif
         
   v_p = zeros(n, 1);
-  v_n = b0 / beta(1);
+  v_n = rM;
   temp2 = beta(1);
   m_p = zeros(n, 1);
   m_pp = zeros(n, 1);
-  AM2m_p = zeros(n, 1);
-  AM2m_pp = zeros(n, 1);
-  y = zeros(n ,1);
+  Am_p = zeros(n, 1);
+  Am_pp = zeros(n, 1);
+  x = x0;
+  
+  if m1exist
+    if m1isnum
+      Mv_n = m1 \ v_n;
+    else
+      Mv_n = feval(m1, v_n, varargin{:});
+    endif
+  else
+  Mv_n = v_n;
+  endif
+  if m2exist
+    if m2isnum
+      Mv_n = m2 \ Mv_n;
+    else
+      Mv_n = feval(m2, Mv_n, varargin{:});
+    endif
+  endif
 
   ## Iteration
   for k = 1: (N - 1)
-    if m2exist
-      if m2isnum
-        M2v_n = m2 \ v_n;
-      else
-        M2v_n = feval(m2, v_n, varargin{:});
-      endif
-    else
-      M2v_n = v_n;
-    endif
     
     if Aisnum
-      AM2v_n = A * M2v_n;
+      AMv_n = A * Mv_n;
     else
-      AM2v_n = feval(A, M2v_n, varargin{:});
+      AMv_n = feval(A, Mv_n, varargin{:});
+    endif
+    
+    alpha(k) = Mv_n' * AMv_n / beta(k) / beta(k);
+    if (k > 1)
+      v_f = (AMv_n - alpha(k) * v_n) / beta(k) - v_p * beta(k) / beta(k - 1);
+    else
+      v_f = (AMv_n - alpha(k) * v_n) / beta(k);
     endif
     
     if m1exist
       if m1isnum
-        M1AM2v_n = m1 \ AM2v_n;
+        Mv_f = m1 \ v_f;
       else
-        M1AM2v_n = feval(m1, AM2v_n, varargin{:});
+        Mv_f = feval(m1, v_f, varargin{:});
       endif
     else
-      M1AM2v_n = AM2v_n;
+    Mv_f = v_f;
+    endif
+    if m2exist
+      if m2isnum
+        Mv_f = m2 \ Mv_f;
+      else
+        Mv_f = feval(m2, Mv_f, varargin{:});
+      endif
     endif
     
-    alpha(k) = v_n' * M1AM2v_n;
-    temp1 = M1AM2v_n - alpha(k) * v_n - beta(k) * v_p;
-    beta(k + 1) = norm(temp1);
+    beta(k + 1) = sqrt(v_f' * Mv_f);
 
     if k > 2
        epsilon(k) = s(k - 2) * beta(k);
@@ -391,16 +409,16 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     c(k) = gamma_h / gamma(k);
     s(k) = beta(k + 1) / gamma(k);
 
-    m = (v_n - epsilon(k) * m_pp - delta(k) * m_p) / gamma(k);
-    AM2m = (AM2v_n - epsilon(k) * AM2m_pp - delta(k) * AM2m_p) / gamma(k);
+    m = (Mv_n / beta(k) - epsilon(k) * m_pp - delta(k) * m_p) / gamma(k);
+    Am = (AMv_n / beta(k) - epsilon(k) * Am_pp - delta(k) * Am_p) / gamma(k);
 
-    y = y + m * temp2 * c(k);
-    rM = rM - AM2m * temp2 * c(k);
+    x = x + m * temp2 * c(k);
+    rM = rM - Am * temp2 * c(k);
     
     normrM = norm(rM);
     temp2 = temp2 * s(k);
     
-    rcg = rM - temp2 * s(k) / c(k) * AM2m;
+    rcg = rM - temp2 * s(k) / c(k) * Am;
     
     relres = normrM / normb;
     resvec(k + 1) = normrM;
@@ -408,16 +426,6 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     iter = k;
     ## Check convergence
     if (relres <= tol) || (beta(k + 1) <= eps)
-      ## Calculate x using y
-      if m2exist
-        if m2isnum
-          x = m2 \ y + x0;
-        else
-          x = feval(m2, y, varargin{:}) + x0;
-        endif
-      else
-        x = y + x0;
-      endif
       ## Precisely calculate relres
       if Aisnum
         resvec(end) = norm(b - A * x);
@@ -442,27 +450,25 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
 
     m_pp = m_p;
     m_p = m;
-    AM2m_pp = AM2m_p;
-    AM2m_p = AM2m;
+    Am_pp = Am_p;
+    Am_p = Am;
     v_p = v_n;
-    v_n = temp1 / beta(k + 1);
+    v_n = v_f;
+    Mv_n = Mv_f;
     
   endfor 
   
-  ## Calculate x using y
-  if (flag != 0) && m2exist
-     if m2isnum
-        x = m2 \ y + x0;
-     else
-        x = feval(m2, y, varargin{:}) + x0;
-     endif
-  else
-     x = y + x0;
+  if (flag != 0)
+    if Aisnum
+      resvec(end) = norm(b - A * x);
+    else
+      resvec(end) = norm(b - feval(A, x, varargin{:}));
+    endif
+    relres = resvec(end) / normb;
   endif
   
-  if (iter == 1)
-    warning ("iteration converged too fast");
-  endif
+  beta
+  alpha
 endfunction
 
 
@@ -593,7 +599,7 @@ endfunction
 %! assert (relres > 0.1);
 %! assert (iter, 20); # should perform max allowable default number of iterations
 
-%!warning <iteration converged too fast>
+%!test
 %! ## solve tridiagonal system with "perfect" preconditioner which converges
 %! ## in one iteration
 %!
@@ -621,7 +627,7 @@ endfunction
 %! M1 = spdiags (4*on, 0, n, n);
 %! x = minres (A, b, tol, maxit, M1);
 %! assert (size (x), [100, 1]);
-%! assert (x,ones(100,1),1e-13);
+%! assert (x,ones(100,1),1e-12);
 
 %!test
 %! ## solve indefinite diagonal system
@@ -632,12 +638,11 @@ endfunction
 %! A = diag([20:-1:1, -1:-1:-20]);
 %! b = sum(A,2);  
 %! tol = 1e-6; 
-%! maxit = 45; 
+%! maxit = 40; 
 %! [x, flag, relres, iter, resvec] = minres (A, b, tol, maxit);
-%! assert (flag, 0);
-%! assert (iter > 40);   
+%! assert (flag, 0); 
 %! assert (size (x), [40, 1]);
-%! assert (x,ones(40,1),1e-7);
+%! assert (x,ones(40,1),1e-5);
 
 %!test
 %! ## solve indefinite hermitian system
@@ -755,8 +760,6 @@ endfunction
 %! assert (x, ones (N, 1), -1e-3);
 
 %!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
 %! ## minres solves preconditioned linear system with A HPD
 %!
 %! N = 20;
@@ -771,11 +774,9 @@ endfunction
 %! assert (Hermitian_A, true);
 %! assert (Hermitian_M, true);
 %! assert (flag, 0);
-%! assert (x, ones (N, 1), -1e-3);
+%! assert (x, ones (N, 1), 1e-4);
 
 %!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
 %! ## minres recognizes that the preconditioner matrix is singular
 %!
 %! N = 3;
@@ -786,11 +787,9 @@ endfunction
 %! assert (flag, 2);
 
 %!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
 %! ## b is zero vector, so minres returns a zero vector
 %!
 %! A = rand (4);
 %! A = A' * A;
 %! [x, flag] = minres (A, zeros (4, 1), [], [], [], [], ones (4, 1));
-%! assert (x, zeros (4, 1))
+%! assert (x, zeros (4, 1));
