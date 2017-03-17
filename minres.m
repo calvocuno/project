@@ -179,7 +179,7 @@
 ## @example
 ## A = diag([20:-1:1, -1:-1:-20]);
 ## b = sum(A,2);
-## x = minres(A, b)
+## x = minres(A, b);
 ## @end example
 ##
 ## Reference:
@@ -365,10 +365,11 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
       AMv_n = feval(A, Mv_n, varargin{:});
     endif
     
-    alpha(k) = Mv_n' * AMv_n / beta(k) / beta(k);
     if (k > 1)
+      alpha(k) = Mv_n' * AMv_n / beta(k) / beta(k);
       v_f = (AMv_n - alpha(k) * v_n) / beta(k) - v_p * beta(k) / beta(k - 1);
     else
+      alpha(k) = Mv_n' * (AMv_n / beta(k) / beta(k));
       v_f = (AMv_n - alpha(k) * v_n) / beta(k);
     endif
     
@@ -467,8 +468,6 @@ function [x, flag, relres, iter, resvec, resveccg]  = minres(A, b, tol, ...
     relres = resvec(end) / normb;
   endif
   
-  beta
-  alpha
 endfunction
 
 
@@ -662,8 +661,6 @@ endfunction
 %! assert (x,ones(100,1),1e-9);
 
 %!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
 %! ## Check that all the subscripts works
 %!
 %! A = toeplitz (sparse ([2, 1 ,0, 0, 0]));
@@ -699,21 +696,17 @@ endfunction
 %! assert(flag, 0);
 
 %!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
 %! ## solve small diagonal system
 %!
 %! N = 10;
 %! A = diag ([1:N]); b = rand (N, 1);
 %! X = A \ b;  # X is the true solution
-%! [x, flag] = minres (A, b, [], N+1);
+%! [x, flag] = minres (A, b, 1e-10, N+1);
 %! assert (norm (x - X) / norm (X), 0, 1e-10);
 %! assert (flag, 0);
 
 %!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
-%! ## A not positive definite
+%! ## A is not positive definite
 %!
 %! N = 10;
 %! A = -diag([1:N]); b = rand (N, 1);
@@ -722,31 +715,16 @@ endfunction
 %! assert (flag, 0);
 
 %!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
-%! ## A is a non-Hermitian matrix
-%! ## minres recognized the wrong type of matrix
-%!
-%! N = 10;
-%! A = diag (1:N) + 1i*1e-04*rand (N);
-%! b = ones (N, 1);
-%! [x,flag] = minres (A, b, []);
-
-%!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
 %! ## A has a small imaginary part
 %!
 %! N = 10;
 %! A = diag (1:N) + 1i*1e-10*rand (N);
 %! b = ones (N, 1);
-%! [x,flag] = minres (A, b, [], N+1);
+%! [x,flag] = minres (A, b, 1e-10, N+1);
 %! assert (flag, 0);
-%! assert (x, A\b, -1e-6);
+%! assert (x, A\b, 1e-6);
 
 %!test
-%! ## modified test from pcg by Piotr Krzyzanowski, Vittoria Rezzonico
-%! ## and Cristiano Dorigo
 %! ## minres solves linear system with A Hermitian positive definite
 %!
 %! N = 20;
@@ -754,10 +732,10 @@ endfunction
 %! A = A'*A;
 %! b = A * ones (N,1);
 %! Hermitian_A = ishermitian (A);
-%! [x,flag] = minres (A, b, [], 2*N);
+%! [x,flag] = minres (A, b, 1e-10, 2*N);
 %! assert (Hermitian_A, true)
 %! assert (flag, 0);
-%! assert (x, ones (N, 1), -1e-3);
+%! assert (x, ones (N, 1), 1e-3);
 
 %!test
 %! ## minres solves preconditioned linear system with A HPD
@@ -770,7 +748,7 @@ endfunction
 %! M = M2' * M2;
 %! Hermitian_A = ishermitian (A);
 %! Hermitian_M = ishermitian (M);
-%! [x,flag] = minres (A, b, [], 2*N, M);
+%! [x,flag] = minres (A, b, 1e-10, 2*N, M);
 %! assert (Hermitian_A, true);
 %! assert (Hermitian_M, true);
 %! assert (flag, 0);
@@ -793,3 +771,19 @@ endfunction
 %! A = A' * A;
 %! [x, flag] = minres (A, zeros (4, 1), [], [], [], [], ones (4, 1));
 %! assert (x, zeros (4, 1));
+
+%!test
+%! ## test split conditioner
+%!
+%! A = toeplitz (1:4);
+%! M = toeplitz ([2,1,0,0]);
+%! b = A * ones (4, 1);
+%! M2 = chol (M);
+%! M1 = M2';
+%! [x1, flag1, relres1, iter1] = minres (A ,b ,[] ,[], M1, M2);
+%! [x2, flag2, relres2, iter2] = minres (A, b, [], [], M1 * M2);
+%! [x3, flag3, relres3, iter3] = minres (M1 \ A / M2, M1 \ b, [], []);
+%! assert (iter1, iter2);
+%! assert (iter2, iter3);
+%! assert (x1, x2, 1e-14);
+%! assert (x2, M2 \ x3, 1e-14);
